@@ -1,3 +1,4 @@
+```cpp
 #include <iostream>
 #include <vector>
 #include <string>
@@ -33,6 +34,18 @@
 #include <limits>
 #include <readline/readline.h>
 #include <readline/history.h>
+#include <QtWidgets/QApplication>
+#include <QtWidgets/QMainWindow>
+#include <QtWidgets/QTabWidget>
+#include <QtWidgets/QVBoxLayout>
+#include <QtWidgets/QHBoxLayout>
+#include <QtWidgets/QGridLayout>
+#include <QtWidgets/QLineEdit>
+#include <QtWidgets/QPushButton>
+#include <QtWidgets/QLabel>
+#include <QtWidgets/QComboBox>
+#include <QtWidgets/QTextEdit>
+#include <QtWidgets/QFileDialog>
 using json = nlohmann::json;
 using namespace std;
 // Struct definitions (moved to top to fix compilation errors)
@@ -469,6 +482,7 @@ public:
         if (curl) curl_easy_cleanup(curl);
     }
     bool isThreatIP(const string& ip) {
+        (void)ip; // Suppress unused parameter warning
         Logger::log("Threat intel disabled for testing.", Logger::INFO);
         return false;
     }
@@ -1295,6 +1309,15 @@ public:
         saveBlockedDomains();
         Logger::log("Restored default firewall configuration.", Logger::INFO);
     }
+    string getStatus() {
+        stringstream ss;
+        ss << "Panic mode: " << (panicModeEnabled ? "Enabled" : "Disabled") << endl;
+        ss << "Internet: " << (internetStatus ? "Connected" : "Disconnected") << endl;
+        ss << "VPN: " << (isVpnConnected() ? "Connected" : "Disconnected") << endl;
+        ss << "Blocked IPs: " << blockedIPs.size() << endl;
+        ss << "Blocked Domains: " << blockedDomains.size() << endl;
+        return ss.str();
+    }
     static char* completion_generator(const char* text, int state) {
         static int list_index, len;
         static vector<string> matches;
@@ -1385,12 +1408,14 @@ public:
                 }
             }
         }
-        if (list_index < matches.size()) {
+        if (static_cast<size_t>(list_index) < matches.size()) {
             return strdup(matches[list_index++].c_str());
         }
         return nullptr;
     }
     static char** firewall_completion(const char* text, int start, int end) {
+        (void)start; // Suppress unused parameter warning
+        (void)end;   // Suppress unused parameter warning
         rl_attempted_completion_over = 1;
         return rl_completion_matches(text, completion_generator);
     }
@@ -1828,6 +1853,552 @@ void displayBanner() {
         Firewall Management System
     )" << endl;
 }
+// GUI Stream Buffer for redirecting cout to QTextEdit
+class TextEditStream : public std::basic_streambuf<char> {
+private:
+    QTextEdit* textEdit;
+public:
+    TextEditStream(QTextEdit* te) : textEdit(te) {}
+protected:
+    virtual std::streamsize xsputn(const char *s, std::streamsize n) {
+        textEdit->append(QString::fromUtf8(s, static_cast<int>(n)));
+        return n;
+    }
+    virtual int overflow(int c) {
+        if (c != EOF) {
+            textEdit->append(QString(static_cast<char>(c)));
+        }
+        return c;
+    }
+};
+// GUI Main Window
+class GUIMainWindow : public QMainWindow {
+Q_OBJECT
+private:
+    FirewallManager* manager;
+    QTextEdit* statusText;
+    TextEditStream* coutStream;
+    std::streambuf* oldCoutBuf;
+public:
+    GUIMainWindow(FirewallManager* mgr, QWidget *parent = nullptr) : QMainWindow(parent), manager(mgr) {
+        setWindowTitle("YUNA Firewall Manager");
+        setMinimumSize(800, 600);
+
+        statusText = new QTextEdit(this);
+        statusText->setReadOnly(true);
+        coutStream = new TextEditStream(statusText);
+        oldCoutBuf = std::cout.rdbuf(coutStream);
+
+        QTabWidget *tabs = new QTabWidget(this);
+
+        tabs->addTab(createBlockTab(), "Block");
+        tabs->addTab(createFirewallTab(), "Firewall");
+        tabs->addTab(createNetworkTab(), "Network");
+        tabs->addTab(createThreatTab(), "Threat");
+        tabs->addTab(createVpnTab(), "VPN");
+        tabs->addTab(createLoggingTab(), "Logging");
+        tabs->addTab(createStatusTab(), "Status");
+
+        QVBoxLayout *mainLayout = new QVBoxLayout;
+        mainLayout->addWidget(tabs);
+        mainLayout->addWidget(new QLabel("Status Output:"));
+        mainLayout->addWidget(statusText);
+
+        QWidget *central = new QWidget;
+        central->setLayout(mainLayout);
+        setCentralWidget(central);
+    }
+    ~GUIMainWindow() {
+        std::cout.rdbuf(oldCoutBuf);
+        delete coutStream;
+    }
+private:
+    QWidget* createBlockTab() {
+        QWidget *tab = new QWidget;
+        QGridLayout *layout = new QGridLayout;
+        int row = 0;
+
+        // Block/Unblock IP
+        QLabel *ipLabel = new QLabel("IP Address:");
+        QLineEdit *ipInput = new QLineEdit;
+        QPushButton *blockIpBtn = new QPushButton("Block IP");
+        connect(blockIpBtn, &QPushButton::clicked, [this, ipInput]() {
+            string ip = ipInput->text().toStdString();
+            if (!ip.empty()) {
+                manager->blockIPAddress(ip);
+            } else {
+                statusText->append("Error: Enter an IP address.");
+            }
+        });
+        QPushButton *unblockIpBtn = new QPushButton("Unblock IP");
+        connect(unblockIpBtn, &QPushButton::clicked, [this, ipInput]() {
+            string ip = ipInput->text().toStdString();
+            if (!ip.empty()) {
+                manager->unblockIPAddress(ip);
+            } else {
+                statusText->append("Error: Enter an IP address.");
+            }
+        });
+        layout->addWidget(ipLabel, row, 0);
+        layout->addWidget(ipInput, row, 1);
+        layout->addWidget(blockIpBtn, row, 2);
+        layout->addWidget(unblockIpBtn, row, 3);
+        row++;
+
+        // Block Website
+        QLabel *websiteLabel = new QLabel("Website Domain:");
+        QLineEdit *websiteInput = new QLineEdit;
+        QPushButton *blockWebsiteBtn = new QPushButton("Block Website");
+        connect(blockWebsiteBtn, &QPushButton::clicked, [this, websiteInput]() {
+            string site = websiteInput->text().toStdString();
+            if (!site.empty()) {
+                manager->blockWebsite(site);
+            } else {
+                statusText->append("Error: Enter a website domain.");
+            }
+        });
+        layout->addWidget(websiteLabel, row, 0);
+        layout->addWidget(websiteInput, row, 1);
+        layout->addWidget(blockWebsiteBtn, row, 2);
+        row++;
+
+        // Block/Unblock Domain
+        QLabel *domainLabel = new QLabel("Domain:");
+        QLineEdit *domainInput = new QLineEdit;
+        QLabel *catLabel = new QLabel("Category (optional):");
+        QLineEdit *catInput = new QLineEdit;
+        QPushButton *blockDomainBtn = new QPushButton("Block Domain");
+        connect(blockDomainBtn, &QPushButton::clicked, [this, domainInput, catInput]() {
+            string domain = domainInput->text().toStdString();
+            string cat = catInput->text().toStdString();
+            if (!domain.empty()) {
+                manager->blockDomain(domain, cat);
+            } else {
+                statusText->append("Error: Enter a domain.");
+            }
+        });
+        QPushButton *unblockDomainBtn = new QPushButton("Unblock Domain");
+        connect(unblockDomainBtn, &QPushButton::clicked, [this, domainInput]() {
+            string domain = domainInput->text().toStdString();
+            if (!domain.empty()) {
+                manager->unblockDomain(domain);
+            } else {
+                statusText->append("Error: Enter a domain.");
+            }
+        });
+        layout->addWidget(domainLabel, row, 0);
+        layout->addWidget(domainInput, row, 1);
+        layout->addWidget(blockDomainBtn, row, 2);
+        layout->addWidget(unblockDomainBtn, row, 3);
+        row++;
+        layout->addWidget(catLabel, row, 0);
+        layout->addWidget(catInput, row, 1);
+        row++;
+
+        // Block/Unblock Category
+        QLabel *categoryLabel = new QLabel("Category:");
+        QComboBox *categoryCombo = new QComboBox;
+        categoryCombo->addItems({"sports", "news", "technology", "entertainment", "finance", "health", "travel", "education", "lifestyle", "science", "gaming", "food", "fashion"});
+        QPushButton *blockCatBtn = new QPushButton("Block Category");
+        connect(blockCatBtn, &QPushButton::clicked, [this, categoryCombo]() {
+            string cat = categoryCombo->currentText().toStdString();
+            manager->blockCategory(cat);
+        });
+        QPushButton *unblockCatBtn = new QPushButton("Unblock Category");
+        connect(unblockCatBtn, &QPushButton::clicked, [this, categoryCombo]() {
+            string cat = categoryCombo->currentText().toStdString();
+            manager->unblockCategory(cat);
+        });
+        layout->addWidget(categoryLabel, row, 0);
+        layout->addWidget(categoryCombo, row, 1);
+        layout->addWidget(blockCatBtn, row, 2);
+        layout->addWidget(unblockCatBtn, row, 3);
+        row++;
+
+        // Block/Unblock All Traffic
+        QPushButton *blockAllBtn = new QPushButton("Block All Traffic");
+        connect(blockAllBtn, &QPushButton::clicked, [this]() {
+            manager->blockAllTraffic();
+        });
+        QPushButton *unblockAllBtn = new QPushButton("Unblock All Traffic");
+        connect(unblockAllBtn, &QPushButton::clicked, [this]() {
+            manager->unblockAllTraffic();
+        });
+        layout->addWidget(blockAllBtn, row, 0, 1, 2);
+        layout->addWidget(unblockAllBtn, row, 2, 1, 2);
+
+        tab->setLayout(layout);
+        return tab;
+    }
+
+    QWidget* createFirewallTab() {
+        QWidget *tab = new QWidget;
+        QGridLayout *layout = new QGridLayout;
+        int row = 0;
+
+        // Add/Remove Port
+        QLabel *portLabel = new QLabel("Port:");
+        QLineEdit *portInput = new QLineEdit;
+        QLabel *protoLabel = new QLabel("Protocol:");
+        QComboBox *protoCombo = new QComboBox;
+        protoCombo->addItems({"tcp", "udp"});
+        QPushButton *addPortBtn = new QPushButton("Add Port");
+        connect(addPortBtn, &QPushButton::clicked, [this, portInput, protoCombo]() {
+            string port = portInput->text().toStdString();
+            string proto = protoCombo->currentText().toStdString();
+            if (!port.empty()) {
+                manager->addFirewallRule("accept", "in", "0.0.0.0/0", port, proto);
+            } else {
+                statusText->append("Error: Enter a port.");
+            }
+        });
+        QPushButton *removePortBtn = new QPushButton("Remove Port");
+        connect(removePortBtn, &QPushButton::clicked, [this, portInput, protoCombo]() {
+            string port = portInput->text().toStdString();
+            string proto = protoCombo->currentText().toStdString();
+            if (!port.empty()) {
+                manager->removeFirewallRule("accept", "in", "0.0.0.0/0", port, proto);
+            } else {
+                statusText->append("Error: Enter a port.");
+            }
+        });
+        layout->addWidget(portLabel, row, 0);
+        layout->addWidget(portInput, row, 1);
+        layout->addWidget(protoLabel, row, 2);
+        layout->addWidget(protoCombo, row, 3);
+        row++;
+        layout->addWidget(addPortBtn, row, 0, 1, 2);
+        layout->addWidget(removePortBtn, row, 2, 1, 2);
+        row++;
+
+        // Add NAT
+        QLabel *srcIpLabel = new QLabel("Source IP:");
+        QLineEdit *srcIpInput = new QLineEdit;
+        QLabel *destIpLabel = new QLabel("Destination IP:");
+        QLineEdit *destIpInput = new QLineEdit;
+        QLabel *natPortLabel = new QLabel("Port:");
+        QLineEdit *natPortInput = new QLineEdit;
+        QPushButton *addNatBtn = new QPushButton("Add NAT Rule");
+        connect(addNatBtn, &QPushButton::clicked, [this, srcIpInput, destIpInput, natPortInput]() {
+            string src = srcIpInput->text().toStdString();
+            string dest = destIpInput->text().toStdString();
+            string port = natPortInput->text().toStdString();
+            if (!src.empty() && !dest.empty() && !port.empty()) {
+                manager->addNatRule(src, dest, port);
+            } else {
+                statusText->append("Error: Fill all fields for NAT.");
+            }
+        });
+        layout->addWidget(srcIpLabel, row, 0);
+        layout->addWidget(srcIpInput, row, 1);
+        row++;
+        layout->addWidget(destIpLabel, row, 0);
+        layout->addWidget(destIpInput, row, 1);
+        row++;
+        layout->addWidget(natPortLabel, row, 0);
+        layout->addWidget(natPortInput, row, 1);
+        layout->addWidget(addNatBtn, row, 2);
+        row++;
+
+        // Remove NAT
+        QLabel *ruleIdLabel = new QLabel("Rule ID:");
+        QLineEdit *ruleIdInput = new QLineEdit;
+        QPushButton *removeNatBtn = new QPushButton("Remove NAT Rule");
+        connect(removeNatBtn, &QPushButton::clicked, [this, ruleIdInput]() {
+            string ruleId = ruleIdInput->text().toStdString();
+            if (!ruleId.empty()) {
+                manager->removeNatRule(ruleId);
+            } else {
+                statusText->append("Error: Enter rule ID.");
+            }
+        });
+        layout->addWidget(ruleIdLabel, row, 0);
+        layout->addWidget(ruleIdInput, row, 1);
+        layout->addWidget(removeNatBtn, row, 2);
+        row++;
+
+        // Other buttons
+        QPushButton *optimizeBtn = new QPushButton("Optimize Rules");
+        connect(optimizeBtn, &QPushButton::clicked, [this]() {
+            manager->optimizeFirewallRules();
+        });
+        QPushButton *rollbackBtn = new QPushButton("Rollback Rules");
+        connect(rollbackBtn, &QPushButton::clicked, [this]() {
+            manager->rollbackRules();
+        });
+        QPushButton *restoreBtn = new QPushButton("Restore Default");
+        connect(restoreBtn, &QPushButton::clicked, [this]() {
+            manager->restoreDefaultConfig();
+        });
+        layout->addWidget(optimizeBtn, row, 0);
+        layout->addWidget(rollbackBtn, row, 1);
+        layout->addWidget(restoreBtn, row, 2);
+
+        tab->setLayout(layout);
+        return tab;
+    }
+
+    QWidget* createNetworkTab() {
+        QWidget *tab = new QWidget;
+        QVBoxLayout *layout = new QVBoxLayout;
+
+        QPushButton *checkInternetBtn = new QPushButton("Check Internet Connectivity");
+        connect(checkInternetBtn, &QPushButton::clicked, [this]() {
+            manager->checkInternetConnectivity();
+        });
+        layout->addWidget(checkInternetBtn);
+
+        QPushButton *checkHealthBtn = new QPushButton("Check Firewall Health");
+        connect(checkHealthBtn, &QPushButton::clicked, [this]() {
+            manager->checkFirewallHealth();
+        });
+        layout->addWidget(checkHealthBtn);
+
+        QHBoxLayout *geoIpLayout = new QHBoxLayout;
+        QLabel *geoIpLabel = new QLabel("IP for GeoIP:");
+        QLineEdit *geoIpInput = new QLineEdit;
+        QPushButton *geoIpBtn = new QPushButton("Get GeoIP");
+        connect(geoIpBtn, &QPushButton::clicked, [this, geoIpInput]() {
+            string ip = geoIpInput->text().toStdString();
+            if (!ip.empty()) {
+                manager->getGeoIP(ip);
+            } else {
+                statusText->append("Error: Enter an IP.");
+            }
+        });
+        geoIpLayout->addWidget(geoIpLabel);
+        geoIpLayout->addWidget(geoIpInput);
+        geoIpLayout->addWidget(geoIpBtn);
+        layout->addLayout(geoIpLayout);
+
+        QPushButton *cleanupBtn = new QPushButton("Cleanup Expired Connections");
+        connect(cleanupBtn, &QPushButton::clicked, [this]() {
+            manager->cleanupExpiredConnections();
+        });
+        layout->addWidget(cleanupBtn);
+
+        tab->setLayout(layout);
+        return tab;
+    }
+
+    QWidget* createThreatTab() {
+        QWidget *tab = new QWidget;
+        QVBoxLayout *layout = new QVBoxLayout;
+
+        QPushButton *detectThreatBtn = new QPushButton("Detect Threat");
+        connect(detectThreatBtn, &QPushButton::clicked, [this]() {
+            bool threat = manager->detectThreat();
+            statusText->append("Threat detected: " + QString(threat ? "Yes" : "No"));
+        });
+        layout->addWidget(detectThreatBtn);
+
+        QHBoxLayout *respondLayout = new QHBoxLayout;
+        QLabel *respondIpLabel = new QLabel("IP to Respond:");
+        QLineEdit *respondIpInput = new QLineEdit;
+        QPushButton *respondThreatBtn = new QPushButton("Respond to Threat");
+        connect(respondThreatBtn, &QPushButton::clicked, [this, respondIpInput]() {
+            string ip = respondIpInput->text().toStdString();
+            if (!ip.empty()) {
+                manager->respondToThreat(ip);
+            } else {
+                statusText->append("Error: Enter an IP.");
+            }
+        });
+        respondLayout->addWidget(respondIpLabel);
+        respondLayout->addWidget(respondIpInput);
+        respondLayout->addWidget(respondThreatBtn);
+        layout->addLayout(respondLayout);
+
+        QPushButton *trainBtn = new QPushButton("Train Neural Network");
+        connect(trainBtn, &QPushButton::clicked, [this]() {
+            manager->trainNeuralNetwork();
+        });
+        layout->addWidget(trainBtn);
+
+        QPushButton *autoHealBtn = new QPushButton("Auto Heal");
+        connect(autoHealBtn, &QPushButton::clicked, [this]() {
+            manager->autoHeal();
+        });
+        layout->addWidget(autoHealBtn);
+
+        tab->setLayout(layout);
+        return tab;
+    }
+
+    QWidget* createVpnTab() {
+        QWidget *tab = new QWidget;
+        QVBoxLayout *layout = new QVBoxLayout;
+
+        QHBoxLayout *connectLayout = new QHBoxLayout;
+        QLabel *configLabel = new QLabel("VPN Config Path:");
+        QLineEdit *configInput = new QLineEdit;
+        QPushButton *browseBtn = new QPushButton("Browse");
+        connect(browseBtn, &QPushButton::clicked, [configInput]() {
+            QString file = QFileDialog::getOpenFileName(nullptr, "Select VPN Config", "", "Config Files (*.ovpn)");
+            if (!file.isEmpty()) {
+                configInput->setText(file);
+            }
+        });
+        QPushButton *connectVpnBtn = new QPushButton("Connect VPN");
+        connect(connectVpnBtn, &QPushButton::clicked, [this, configInput]() {
+            string config = configInput->text().toStdString();
+            if (!config.empty()) {
+                manager->connectToVpn(config);
+            } else {
+                statusText->append("Error: Enter config path.");
+            }
+        });
+        connectLayout->addWidget(configLabel);
+        connectLayout->addWidget(configInput);
+        connectLayout->addWidget(browseBtn);
+        connectLayout->addWidget(connectVpnBtn);
+        layout->addLayout(connectLayout);
+
+        QPushButton *disconnectVpnBtn = new QPushButton("Disconnect VPN");
+        connect(disconnectVpnBtn, &QPushButton::clicked, [this]() {
+            manager->disconnectVpn();
+        });
+        layout->addWidget(disconnectVpnBtn);
+
+        tab->setLayout(layout);
+        return tab;
+    }
+
+    QWidget* createLoggingTab() {
+        QWidget *tab = new QWidget;
+        QGridLayout *layout = new QGridLayout;
+        int row = 0;
+
+        // Send Notification
+        QLabel *titleLabel = new QLabel("Title:");
+        QLineEdit *titleInput = new QLineEdit;
+        QLabel *msgLabel = new QLabel("Message:");
+        QLineEdit *msgInput = new QLineEdit;
+        QPushButton *sendNotifBtn = new QPushButton("Send Notification");
+        connect(sendNotifBtn, &QPushButton::clicked, [this, titleInput, msgInput]() {
+            string title = titleInput->text().toStdString();
+            string msg = msgInput->text().toStdString();
+            if (!title.empty() && !msg.empty()) {
+                manager->sendNotification(title, msg);
+            } else {
+                statusText->append("Error: Fill title and message.");
+            }
+        });
+        layout->addWidget(titleLabel, row, 0);
+        layout->addWidget(titleInput, row, 1);
+        row++;
+        layout->addWidget(msgLabel, row, 0);
+        layout->addWidget(msgInput, row, 1);
+        layout->addWidget(sendNotifBtn, row, 2);
+        row++;
+
+        // Rule Violation
+        QLabel *ruleLabel = new QLabel("Rule:");
+        QLineEdit *ruleInput = new QLineEdit;
+        QLabel *detailLabel = new QLabel("Detail:");
+        QLineEdit *detailInput = new QLineEdit;
+        QPushButton *violationBtn = new QPushButton("Report Violation");
+        connect(violationBtn, &QPushButton::clicked, [this, ruleInput, detailInput]() {
+            string rule = ruleInput->text().toStdString();
+            string detail = detailInput->text().toStdString();
+            if (!rule.empty() && !detail.empty()) {
+                manager->ruleViolationDetected(rule, detail);
+            } else {
+                statusText->append("Error: Fill rule and detail.");
+            }
+        });
+        layout->addWidget(ruleLabel, row, 0);
+        layout->addWidget(ruleInput, row, 1);
+        row++;
+        layout->addWidget(detailLabel, row, 0);
+        layout->addWidget(detailInput, row, 1);
+        layout->addWidget(violationBtn, row, 2);
+        row++;
+
+        // Set Log Level
+        QLabel *logLevelLabel = new QLabel("Log Level:");
+        QComboBox *logLevelCombo = new QComboBox;
+        logLevelCombo->addItems({"INFO", "WARNING", "ERROR", "DEBUG"});
+        QPushButton *setLogLevelBtn = new QPushButton("Set Log Level");
+        connect(setLogLevelBtn, &QPushButton::clicked, [logLevelCombo]() {
+            string level = logLevelCombo->currentText().toStdString();
+            if (level == "INFO") Logger::setLevel(Logger::INFO);
+            else if (level == "WARNING") Logger::setLevel(Logger::WARNING);
+            else if (level == "ERROR") Logger::setLevel(Logger::ERROR);
+            else if (level == "DEBUG") Logger::setLevel(Logger::DEBUG);
+        });
+        layout->addWidget(logLevelLabel, row, 0);
+        layout->addWidget(logLevelCombo, row, 1);
+        layout->addWidget(setLogLevelBtn, row, 2);
+        row++;
+
+        // Rotate Logs
+        QPushButton *rotateLogsBtn = new QPushButton("Rotate Logs");
+        connect(rotateLogsBtn, &QPushButton::clicked, []() {
+            Logger::rotateLogs();
+        });
+        layout->addWidget(rotateLogsBtn, row, 0);
+
+        // Log Message
+        QLabel *customLevelLabel = new QLabel("Level:");
+        QComboBox *customLevelCombo = new QComboBox;
+        customLevelCombo->addItems({"INFO", "WARNING", "ERROR", "DEBUG"});
+        QLabel *customMsgLabel = new QLabel("Message:");
+        QLineEdit *customMsgInput = new QLineEdit;
+        QPushButton *logMsgBtn = new QPushButton("Log Message");
+        connect(logMsgBtn, &QPushButton::clicked, [customLevelCombo, customMsgInput]() {
+            string level = customLevelCombo->currentText().toStdString();
+            string msg = customMsgInput->text().toStdString();
+            if (!msg.empty()) {
+                if (level == "INFO") Logger::log(msg, Logger::INFO);
+                else if (level == "WARNING") Logger::log(msg, Logger::WARNING);
+                else if (level == "ERROR") Logger::log(msg, Logger::ERROR);
+                else if (level == "DEBUG") Logger::log(msg, Logger::DEBUG);
+            }
+        });
+        layout->addWidget(customLevelLabel, row, 1);
+        layout->addWidget(customLevelCombo, row, 2);
+        row++;
+        layout->addWidget(customMsgLabel, row, 0);
+        layout->addWidget(customMsgInput, row, 1);
+        layout->addWidget(logMsgBtn, row, 2);
+
+        tab->setLayout(layout);
+        return tab;
+    }
+
+    QWidget* createStatusTab() {
+        QWidget *tab = new QWidget;
+        QVBoxLayout *layout = new QVBoxLayout;
+
+        QPushButton *showStatusBtn = new QPushButton("Show Status");
+        connect(showStatusBtn, &QPushButton::clicked, [this]() {
+            string status = manager->getStatus();
+            statusText->append(QString::fromStdString(status));
+        });
+        layout->addWidget(showStatusBtn);
+
+        QHBoxLayout *exportLayout = new QHBoxLayout;
+        QLabel *exportLabel = new QLabel("Export Filename:");
+        QLineEdit *exportInput = new QLineEdit;
+        QPushButton *exportBtn = new QPushButton("Export Blocked IPs");
+        connect(exportBtn, &QPushButton::clicked, [this, exportInput]() {
+            string filename = exportInput->text().toStdString();
+            if (!filename.empty()) {
+                manager->exportBlockedIPsToCSV(filename);
+            } else {
+                statusText->append("Error: Enter filename.");
+            }
+        });
+        exportLayout->addWidget(exportLabel);
+        exportLayout->addWidget(exportInput);
+        exportLayout->addWidget(exportBtn);
+        layout->addLayout(exportLayout);
+
+        tab->setLayout(layout);
+        return tab;
+    }
+};
 // Main function
 int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler);
@@ -1836,6 +2407,14 @@ int main(int argc, char* argv[]) {
     Logger::rotateLogs();
     string interface = (argc > 1) ? argv[1] : "eth0";
     FirewallManager manager(interface);
-    manager.runCLI();
+    if (argc > 2 && string(argv[2]) == "gui") {
+        QApplication app(argc, argv);
+        GUIMainWindow window(&manager);
+        window.show();
+        return app.exec();
+    } else {
+        manager.runCLI();
+    }
     return 0;
 }
+```
