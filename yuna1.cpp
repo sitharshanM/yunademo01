@@ -13,6 +13,7 @@
 #include <random>
 #include <cmath>
 #include <ctime>
+#include <time.h>
 #include <cstdlib>
 #include <unistd.h>
 #include <sys/types.h>
@@ -84,6 +85,12 @@ struct FirewallRule {
     string destination;
     string protocol;
 };
+
+// NEW ASYNC LOGGER STRUCT
+struct LogRecord {
+    Logger::LogLevel level;
+    std::string msg;
+};
 // Constants
 #define TIMEOUT_SECONDS 3600
 #define MAX_TRAINING_SAMPLES 1000
@@ -124,37 +131,11 @@ void signalHandler(int signum) {
 class Logger {
 public:
     enum LogLevel { INFO, WARNING, ERROR, DEBUG };
-private:
-    static LogLevel currentLevel;
-    static string getLogFilePath() {
-        char* home = getenv("HOME");
-        if (!home) {
-            cerr << "Error: HOME environment variable not set." << endl;
-            exit(1);
-        }
-        string logDir = string(home) + "/FirewallManagerLogs";
-        if (mkdir(logDir.c_str(), 0755) != 0 && errno != EEXIST) {
-            cerr << "Error: Failed to create log directory " << logDir << ": " << strerror(errno) << endl;
-            exit(1);
-        }
-        return logDir + "/firewall_manager.log";
-    }
-    static string getTimestamp() {
-        auto now = chrono::system_clock::now();
-        time_t tt = chrono::system_clock::to_time_t(now);
-        tm local_tm = *localtime(&tt);
-        char buffer[80];
-        strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &local_tm);
-        return string(buffer);
-    }
-    static string encryptLog(const string& message) {
-        return "[ENCRYPTED]" + message; // Placeholder
-    }
-public:
     static void setLevel(LogLevel level) {
         currentLevel = level;
         log("Logging level set to " + to_string(level), INFO);
     }
+    /* OLD SYNC LOGGER - DISABLED
     static void log(const string &message, LogLevel level = INFO) {
         if (level < currentLevel) return;
         string levelStr;
@@ -176,20 +157,129 @@ public:
             cerr << "Error: Failed to open log file." << endl;
         }
     }
+    */
+    static void log(const std::string& message, LogLevel level = INFO) {
+        if (level < currentLevel) return;
+
+        {
+            std::lock_guard<std::mutex> lock(logMutex);
+            logQueue.push({ level, message });
+        }
+
+        logCV.notify_one();
+    }
+    static void startAsyncLogger() {
+        if (writerRunning.load()) {
+            return;
+        }
+        writerRunning = true;
+        writerThread = std::thread(writerLoop);
+    }
+    static void shutdownAsyncLogger() {
+        writerRunning = false;
+        logCV.notify_all();
+        if (writerThread.joinable()) {
+            writerThread.join();
+        }
+    }
     static void rotateLogs() {
         string path = getLogFilePath();
         struct stat st;
         if (stat(path.c_str(), &st) == 0 && st.st_size > LOG_ROTATION_SIZE) {
             string oldPath = path + ".old";
             if (rename(path.c_str(), oldPath.c_str()) == 0) {
-                log("Log file rotated successfully.", INFO);
+                std::cerr << "[Logger] Log file rotated successfully." << std::endl;
             } else {
-                log("Failed to rotate log file.", ERROR);
+                std::cerr << "[Logger] Failed to rotate log file." << std::endl;
             }
         }
     }
+private:
+    static LogLevel currentLevel;
+    // NEW: Async logging internals
+    static std::queue<LogRecord> logQueue;
+    static std::mutex logMutex;
+    static std::condition_variable logCV;
+    static std::atomic<bool> writerRunning;
+    static std::thread writerThread;
+    static string getLogFilePath() {
+        char* home = getenv("HOME");
+        if (!home) {
+            cerr << "Error: HOME environment variable not set." << endl;
+            exit(1);
+        }
+        string logDir = string(home) + "/FirewallManagerLogs";
+        if (mkdir(logDir.c_str(), 0755) != 0 && errno != EEXIST) {
+            cerr << "Error: Failed to create log directory " << logDir << ": " << strerror(errno) << endl;
+            exit(1);
+        }
+        return logDir + "/firewall_manager.log";
+    }
+    static string getTimestamp() {
+        auto now = chrono::system_clock::now();
+        time_t tt = chrono::system_clock::to_time_t(now);
+        tm local_tm;
+        if (localtime_r(&tt, &local_tm) == nullptr) {
+            return "TIME_ERROR";
+        }
+        char buffer[80];
+        strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &local_tm);
+        return string(buffer);
+    }
+    static string encryptLog(const string& message) {
+        return "[ENCRYPTED]" + message; // Placeholder
+    }
+    static string levelToString(LogLevel level) {
+        switch (level) {
+            case INFO: return "INFO";
+            case WARNING: return "WARNING";
+            case ERROR: return "ERROR";
+            case DEBUG: return "DEBUG";
+            default: return "UNKNOWN";
+        }
+    }
+    static void writerLoop() {
+        std::ofstream file(getLogFilePath(), std::ios::app);
+
+        if (!file.is_open()) {
+            std::cerr << "Error: Failed to open log file." << std::endl;
+            return;
+        }
+
+        auto lastFlush = std::chrono::steady_clock::now();
+
+        while (writerRunning.load() || !logQueue.empty()) {
+            std::unique_lock<std::mutex> lock(logMutex);
+            logCV.wait(lock, [] {
+                return !logQueue.empty() || !writerRunning.load();
+            });
+
+            while (!logQueue.empty()) {
+                LogRecord r = logQueue.front();
+                logQueue.pop();
+                lock.unlock();
+
+                file << getTimestamp() << " [" << levelToString(r.level) << "] " << encryptLog(r.msg) << "\n";
+
+                lock.lock();
+            }
+
+            auto now = std::chrono::steady_clock::now();
+            if (now - lastFlush >= std::chrono::milliseconds(250) || !writerRunning.load()) {
+                file.flush();
+                lastFlush = now;
+            }
+        }
+
+        file.close();
+    }
 };
 Logger::LogLevel Logger::currentLevel = Logger::INFO;
+std::queue<LogRecord> Logger::logQueue;
+std::mutex Logger::logMutex;
+std::condition_variable Logger::logCV;
+std::atomic<bool> Logger::writerRunning{false};
+std::thread Logger::writerThread;
 // NeuralNetwork class
 class NeuralNetwork {
 private:
@@ -2404,17 +2494,20 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler);
     displayBanner();
     Logger::setLevel(Logger::DEBUG);
+    Logger::startAsyncLogger();
     Logger::rotateLogs();
     string interface = (argc > 1) ? argv[1] : "eth0";
     FirewallManager manager(interface);
+    int exitCode = 0;
     if (argc > 2 && string(argv[2]) == "gui") {
         QApplication app(argc, argv);
         GUIMainWindow window(&manager);
         window.show();
-        return app.exec();
+        exitCode = app.exec();
     } else {
         manager.runCLI();
     }
-    return 0;
+    Logger::shutdownAsyncLogger();
+    return exitCode;
 }
 ```
