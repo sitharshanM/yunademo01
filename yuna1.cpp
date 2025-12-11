@@ -12,7 +12,10 @@
 #include <mutex>
 #include <random>
 #include <cmath>
+// [AsyncLogger Patch #1] Added stdio header for batched fwrite usage
+#include <cstdio>
 #include <ctime>
+#include <time.h>
 #include <cstdlib>
 #include <unistd.h>
 #include <sys/types.h>
@@ -34,6 +37,14 @@
 #include <limits>
 #include <readline/readline.h>
 #include <readline/history.h>
+// [AsyncLogger Patch #5] Use moodycamel concurrent queue for lock-free producers
+#include "concurrentqueue.h"   // moodycamel::ConcurrentQueue (header-only)
+// [AsyncLogger Patch #5] Dependency: ensure third_party/moodycamel is on the include path
+#include <cstring>
+// [AsyncLogger Patch #7] Thread-local buffers reduce allocations when logging in tight loops (packet processing).
+// [AsyncLogger Patch #7] Thread-local buffer to avoid heap allocations in hot path
+thread_local std::string tl_log_buffer;
+constexpr size_t TL_LOG_BUFFER_RESERVE = 512; // default reserve per thread
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QMainWindow>
 #include <QtWidgets/QTabWidget>
@@ -84,6 +95,12 @@ struct FirewallRule {
     string destination;
     string protocol;
 };
+
+// NEW ASYNC LOGGER STRUCT
+struct LogRecord {
+    Logger::LogLevel level;
+    std::string msg;
+};
 // Constants
 #define TIMEOUT_SECONDS 3600
 #define MAX_TRAINING_SAMPLES 1000
@@ -123,38 +140,26 @@ void signalHandler(int signum) {
 // Logger class
 class Logger {
 public:
+    // [AsyncLogger Patch #7] Thread-local buffers reduce allocations; see prepareThreadLogBuffer() usage notes.
+    // [AsyncLogger Patch #6] Logger now has a bounded queue with drop policy to prevent RAM overuse under high log rates.
     enum LogLevel { INFO, WARNING, ERROR, DEBUG };
-private:
-    static LogLevel currentLevel;
-    static string getLogFilePath() {
-        char* home = getenv("HOME");
-        if (!home) {
-            cerr << "Error: HOME environment variable not set." << endl;
-            exit(1);
+    // [AsyncLogger Patch #7] Prepare thread-local buffer and return a reference for building messages
+    static std::string& prepareThreadLogBuffer() {
+        if (tl_log_buffer.capacity() < TL_LOG_BUFFER_RESERVE) {
+            tl_log_buffer.reserve(TL_LOG_BUFFER_RESERVE);
         }
-        string logDir = string(home) + "/FirewallManagerLogs";
-        if (mkdir(logDir.c_str(), 0755) != 0 && errno != EEXIST) {
-            cerr << "Error: Failed to create log directory " << logDir << ": " << strerror(errno) << endl;
-            exit(1);
-        }
-        return logDir + "/firewall_manager.log";
+        tl_log_buffer.clear();
+        return tl_log_buffer;
     }
-    static string getTimestamp() {
-        auto now = chrono::system_clock::now();
-        time_t tt = chrono::system_clock::to_time_t(now);
-        tm local_tm = *localtime(&tt);
-        char buffer[80];
-        strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &local_tm);
-        return string(buffer);
+    // [AsyncLogger Patch #7] Convenience overload that forwards moved buffers into Logger::log
+    static void logFromBufferAndMove(std::string&& preparedBuffer, LogLevel level = INFO) {
+        Logger::log(std::move(preparedBuffer), level);
     }
-    static string encryptLog(const string& message) {
-        return "[ENCRYPTED]" + message; // Placeholder
-    }
-public:
     static void setLevel(LogLevel level) {
         currentLevel = level;
         log("Logging level set to " + to_string(level), INFO);
     }
+    /* OLD SYNC LOGGER - DISABLED
     static void log(const string &message, LogLevel level = INFO) {
         if (level < currentLevel) return;
         string levelStr;
@@ -176,20 +181,267 @@ public:
             cerr << "Error: Failed to open log file." << endl;
         }
     }
+    */
+    // [AsyncLogger Patch #7] Usage: auto& buf = Logger::prepareThreadLogBuffer(); buf.append(...); Logger::log(std::move(buf), level);
+    static void log(const std::string& message, LogLevel level = INFO) {
+        if (level < currentLevel) return;
+        // [AsyncLogger Patch #6] Enforce bounded queue size
+        size_t current = queuedCount.load(std::memory_order_relaxed);
+        if (current >= MAX_LOG_QUEUE_SIZE) {
+            if (level == DEBUG) {
+                droppedLogs.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            droppedLogs.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        // [AsyncLogger Patch #4] Only enqueue raw (unencrypted) message in hot path
+        // [AsyncLogger Patch #5] Try lock-free enqueue first; fallback to locked queue if necessary
+        LogRecord rec{ level, message };
+        bool enqueued = lfLogQueue.try_enqueue(rec);
+
+        if (!enqueued) {
+            // [AsyncLogger Patch #5] Fallback path: use locked queue to guarantee delivery
+            std::lock_guard<std::mutex> lock(logMutex);
+            fallbackLogQueue.push(std::move(rec));
+        }
+        // [AsyncLogger Patch #6] Increment queuedCount after successful enqueue
+        queuedCount.fetch_add(1, std::memory_order_relaxed);
+
+        logCV.notify_one();
+    }
+    static void startAsyncLogger() {
+        if (writerRunning.load()) {
+            return;
+        }
+        writerRunning = true;
+        writerThread = std::thread(writerLoop);
+    }
+    static void shutdownAsyncLogger() {
+        writerRunning = false;
+        logCV.notify_all();
+        if (writerThread.joinable()) {
+            writerThread.join();
+        }
+    }
     static void rotateLogs() {
         string path = getLogFilePath();
         struct stat st;
         if (stat(path.c_str(), &st) == 0 && st.st_size > LOG_ROTATION_SIZE) {
             string oldPath = path + ".old";
             if (rename(path.c_str(), oldPath.c_str()) == 0) {
-                log("Log file rotated successfully.", INFO);
+                // [AsyncLogger Patch #4] Avoid recursive log calls during rotation
+                std::cerr << "[Logger] Log file rotated successfully." << std::endl;
             } else {
-                log("Failed to rotate log file.", ERROR);
+                std::cerr << "[Logger] Failed to rotate log file." << std::endl;
             }
         }
     }
+private:
+    static LogLevel currentLevel;
+    // NEW: Async logging internals
+    // [AsyncLogger Patch #5] Lock-free producer queue for fast non-blocking enqueues
+    static moodycamel::ConcurrentQueue<LogRecord> lfLogQueue;
+    // [AsyncLogger Patch #5] Fallback locked queue (rarely used if lock-free fails)
+    static std::queue<LogRecord> fallbackLogQueue;
+    static std::mutex logMutex;
+    static std::condition_variable logCV;
+    static std::atomic<bool> writerRunning;
+    static std::thread writerThread;
+    // [AsyncLogger Patch #6] Bounded queue counters
+    static std::atomic<size_t> queuedCount;        // number of queued log messages
+    static std::atomic<size_t> droppedLogs;        // number of dropped log messages
+    // [AsyncLogger Patch #6] Queue capacity limit
+    constexpr static size_t MAX_LOG_QUEUE_SIZE = 65536;   // 64K entries
+    // [AsyncLogger Patch #3] Cached timestamp variables to reduce strftime calls
+    static std::atomic<long long> cachedTsMs;        // epoch ms of cached string
+    static std::string cachedTsStr;                  // formatted timestamp string
+    static std::mutex cachedTsMutex;                 // protects cachedTsStr update
+    constexpr static int TIMESTAMP_CACHE_MS = 200;   // cache duration in milliseconds
+    static string getLogFilePath() {
+        char* home = getenv("HOME");
+        if (!home) {
+            cerr << "Error: HOME environment variable not set." << endl;
+            exit(1);
+        }
+        string logDir = string(home) + "/FirewallManagerLogs";
+        if (mkdir(logDir.c_str(), 0755) != 0 && errno != EEXIST) {
+            cerr << "Error: Failed to create log directory " << logDir << ": " << strerror(errno) << endl;
+            exit(1);
+        }
+        return logDir + "/firewall_manager.log";
+    }
+    static string getTimestamp() {
+        auto now = chrono::system_clock::now();
+        time_t tt = chrono::system_clock::to_time_t(now);
+        tm local_tm;
+        if (localtime_r(&tt, &local_tm) == nullptr) {
+            return "TIME_ERROR";
+        }
+        char buffer[80];
+        strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", &local_tm);
+        return string(buffer);
+    }
+    static string encryptLog(const string& message) {
+        return "[ENCRYPTED]" + message; // Placeholder
+    }
+    static string levelToString(LogLevel level) {
+        switch (level) {
+            case INFO: return "INFO";
+            case WARNING: return "WARNING";
+            case ERROR: return "ERROR";
+            case DEBUG: return "DEBUG";
+            default: return "UNKNOWN";
+        }
+    }
+    // [AsyncLogger Patch #6] Expose simple metrics for debugging
+    static json getQueueMetrics() {
+        json j;
+        j["queued"] = queuedCount.load();
+        j["dropped"] = droppedLogs.load();
+        j["max_capacity"] = MAX_LOG_QUEUE_SIZE;
+        return j;
+    }
+    // [AsyncLogger Patch #3] Return cached timestamp string, refresh if older than TIMESTAMP_CACHE_MS
+    static std::string getCachedTimestamp() {
+        using namespace std::chrono;
+        long long nowMs = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+        long long last = cachedTsMs.load(std::memory_order_relaxed);
+
+        // Fast path: cache still valid
+        if (nowMs - last < TIMESTAMP_CACHE_MS && !cachedTsStr.empty()) {
+            return cachedTsStr;
+        }
+
+        // Slow path: update cached string under lock
+        std::lock_guard<std::mutex> lock(cachedTsMutex);
+        // Double-check after acquiring lock
+        last = cachedTsMs.load(std::memory_order_relaxed);
+        if (nowMs - last < TIMESTAMP_CACHE_MS && !cachedTsStr.empty()) {
+            return cachedTsStr;
+        }
+
+        // Recompute formatted timestamp
+        std::time_t tt = std::time(nullptr);
+        std::tm tm_buf;
+        localtime_r(&tt, &tm_buf); // thread-safe localtime
+        char buf[64];
+        size_t n = strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm_buf);
+        (void)n;
+        // Append milliseconds
+        int ms_part = (int)(nowMs % 1000);
+        char finalBuf[80];
+        snprintf(finalBuf, sizeof(finalBuf), "%s.%03d", buf, ms_part);
+
+        cachedTsStr = std::string(finalBuf, strlen(finalBuf));
+        cachedTsMs.store(nowMs, std::memory_order_relaxed);
+        return cachedTsStr;
+    }
+    // [AsyncLogger Patch #1] Added batching constants for high-performance writer
+    static constexpr size_t LOGGER_BATCH_SIZE = 128;
+    static constexpr size_t LOGGER_FLUSH_INTERVAL_MS = 50;
+    static void writerLoop() {
+        // [AsyncLogger Patch #2] Switched to FILE* for high-performance buffered I/O
+        FILE* fp = fopen(getLogFilePath().c_str(), "a");
+
+        if (!fp) {
+            std::cerr << "[Logger] Failed to open log file." << std::endl;
+            return;
+        }
+
+        // [AsyncLogger Patch #2] Add large 64 KB buffer to improve write throughput
+        static thread_local std::vector<char> logFileBuffer;
+        logFileBuffer.resize(64 * 1024);  // 64KB buffer
+        setvbuf(fp, logFileBuffer.data(), _IOFBF, logFileBuffer.size());
+
+        while (true) {
+            std::unique_lock<std::mutex> lock(logMutex);
+            logCV.wait(lock, [] {
+                return Logger::queuedCount.load(std::memory_order_relaxed) > 0 || !writerRunning.load();
+            });
+
+            if (!writerRunning.load() && Logger::queuedCount.load(std::memory_order_relaxed) == 0) {
+                break;
+            }
+
+            // [AsyncLogger Patch #1] Implemented batch writes for performance
+            std::string batchBuffer;
+            batchBuffer.reserve(8192); // reserve space to minimize reallocs
+            size_t collected = 0;
+
+            LogRecord rec;
+            // [AsyncLogger Patch #5] Helper to append processed records into the batch buffer
+            auto appendRecord = [&](const LogRecord& record) {
+                // [AsyncLogger Patch #3] Use cached timestamp to avoid per-line strftime
+                batchBuffer.append(getCachedTimestamp());
+                batchBuffer.append(" [");
+                batchBuffer.append(levelToString(record.level));
+                batchBuffer.append("] ");
+                // [AsyncLogger Patch #4] If encryption disabled, fall back to raw message
+                // [AsyncLogger Patch #4] Encrypt messages HERE in writer thread (not hot path)
+                batchBuffer.append(encryptLog(record.msg));
+                batchBuffer.push_back('\n');
+            };
+
+            // [AsyncLogger Patch #1] Release lock before performing disk I/O
+            lock.unlock();
+
+            // [AsyncLogger Patch #5] Drain lock-free producer queue first (fast path)
+            while (collected < LOGGER_BATCH_SIZE && lfLogQueue.try_dequeue(rec)) {
+                appendRecord(rec);
+                collected++;
+                // [AsyncLogger Patch #6] Decrement queue count after consuming record
+                queuedCount.fetch_sub(1, std::memory_order_relaxed);
+            }
+
+            // [AsyncLogger Patch #5] Then drain fallback locked queue (rare)
+            {
+                std::lock_guard<std::mutex> fallbackLock(logMutex);
+                while (collected < LOGGER_BATCH_SIZE && !fallbackLogQueue.empty()) {
+                    rec = std::move(fallbackLogQueue.front());
+                    fallbackLogQueue.pop();
+                    appendRecord(rec);
+                    collected++;
+                    // [AsyncLogger Patch #6] Decrement queue count after consuming record
+                    queuedCount.fetch_sub(1, std::memory_order_relaxed);
+                }
+            }
+
+            // **Write entire batch at once**
+            if (!batchBuffer.empty()) {
+                // [AsyncLogger Patch #2] Using fwrite() for batch writes
+                // [AsyncLogger Patch #1] Single syscall for entire batch
+                fwrite(batchBuffer.data(), 1, batchBuffer.size(), fp);
+            }
+
+            // [AsyncLogger Patch #2] Explicit flush for FILE*
+            static auto lastFlush = std::chrono::steady_clock::now();
+            auto now = std::chrono::steady_clock::now();
+            if (now - lastFlush >= std::chrono::milliseconds(LOGGER_FLUSH_INTERVAL_MS) || !writerRunning.load()) {
+                fflush(fp);
+                lastFlush = now;
+            }
+        }
+
+        // [AsyncLogger Patch #2] Close FILE* safely at shutdown
+        fclose(fp);
+    }
 };
 Logger::LogLevel Logger::currentLevel = Logger::INFO;
+// [AsyncLogger Patch #5] Define producer/consumer queues
+moodycamel::ConcurrentQueue<LogRecord> Logger::lfLogQueue;
+std::queue<LogRecord> Logger::fallbackLogQueue;
+std::mutex Logger::logMutex;
+std::condition_variable Logger::logCV;
+std::atomic<bool> Logger::writerRunning{false};
+std::thread Logger::writerThread;
+// [AsyncLogger Patch #3] Define static cached timestamp variables
+std::atomic<long long> Logger::cachedTsMs{0};
+std::string Logger::cachedTsStr = "";
+std::mutex Logger::cachedTsMutex;
+// [AsyncLogger Patch #6] Initialize bounded-queue counters
+std::atomic<size_t> Logger::queuedCount{0};
+std::atomic<size_t> Logger::droppedLogs{0};
 // NeuralNetwork class
 class NeuralNetwork {
 private:
@@ -2404,17 +2656,20 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signalHandler);
     displayBanner();
     Logger::setLevel(Logger::DEBUG);
+    Logger::startAsyncLogger();
     Logger::rotateLogs();
     string interface = (argc > 1) ? argv[1] : "eth0";
     FirewallManager manager(interface);
+    int exitCode = 0;
     if (argc > 2 && string(argv[2]) == "gui") {
         QApplication app(argc, argv);
         GUIMainWindow window(&manager);
         window.show();
-        return app.exec();
+        exitCode = app.exec();
     } else {
         manager.runCLI();
     }
-    return 0;
+    Logger::shutdownAsyncLogger();
+    return exitCode;
 }
 ```
