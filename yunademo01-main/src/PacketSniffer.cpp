@@ -99,6 +99,7 @@ void PacketSniffer::packetCallback(u_char *user,
     double flagAnomaly = 0.0;
     std::string protoStr = "IP";
     std::string dnsQueryDomain = "";
+    std::string payloadStr = "";
 
     if (protocol == IPPROTO_TCP) {
         protoStr = "TCP";
@@ -124,6 +125,7 @@ void PacketSniffer::packetCallback(u_char *user,
         if (payloadLen > 0) {
             const u_char *payload = transportHeader + tcpHeaderLen;
             payloadEntropy = calculateEntropy(payload, payloadLen) / 8.0; // Normalize between [0, 1]
+            payloadStr = std::string(reinterpret_cast<const char*>(payload), payloadLen);
         }
     } else if (protocol == IPPROTO_UDP) {
         protoStr = "UDP";
@@ -140,11 +142,12 @@ void PacketSniffer::packetCallback(u_char *user,
         if (payloadLen > 0) {
             const u_char *payload = transportHeader + 8;
             payloadEntropy = calculateEntropy(payload, payloadLen) / 8.0;
+            payloadStr = std::string(reinterpret_cast<const char*>(payload), payloadLen);
             if (dPortVal == 53) {
                 dnsQueryDomain = parseDNSQuery(payload, payloadLen);
             }
         }
     }
 
-    mgr->processPacket(sourceIP, sourcePort, destIP, destPort, pkthdr->len, protoStr, payloadEntropy, flagAnomaly, dnsQueryDomain);
+    mgr->processPacket(sourceIP, sourcePort, destIP, destPort, pkthdr->len, protoStr, payloadEntropy, flagAnomaly, dnsQueryDomain, payloadStr);
 }

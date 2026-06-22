@@ -10,6 +10,7 @@
 #include "QosManager.h"
 #include "DeviceMapper.h"
 #include "HoneypotManager.h"
+#include "IpsEngine.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -46,6 +47,7 @@ private:
     std::unique_ptr<QosManager> qosManager;
     std::unique_ptr<DeviceMapper> deviceMapper;
     std::unique_ptr<HoneypotManager> honeypotManager;
+    std::unique_ptr<IpsEngine> ipsEngine;
     std::thread threatMonitorThread;
     std::thread maintenanceThread;
     std::condition_variable cv;
@@ -129,13 +131,15 @@ public:
                        const std::string& destIP, const std::string& destPort, int size,
                        const std::string& protocol = "IP",
                        double payloadEntropy = 0.0, double flagAnomaly = 0.0,
-                       const std::string& dnsQueryDomain = "");
+                       const std::string& dnsQueryDomain = "",
+                       const std::string& payload = "");
     void runCLI();
     VPNPoolManager* getVpnPool() const { return vpnPool.get(); }
     ThreatIntelSynchronizer* getThreatSync() const { return threatSync.get(); }
     QosManager* getQosManager() const { return qosManager.get(); }
     DeviceMapper* getDeviceMapper() const { return deviceMapper.get(); }
     HoneypotManager* getHoneypotManager() const { return honeypotManager.get(); }
+    IpsEngine* getIpsEngine() const { return ipsEngine.get(); }
     std::string getWebhookUrl() const { return webhookUrl; }
     void setWebhookUrl(const std::string& url) { webhookUrl = url; saveConfig(); }
     void setCategorySchedule(const std::string& category, int start, int end, bool enabled);

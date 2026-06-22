@@ -230,6 +230,7 @@ FirewallManager::FirewallManager(const string &interface)
     deviceMapper->startAutoScan(30);
 
     honeypotManager = std::make_unique<HoneypotManager>();
+    ipsEngine = std::make_unique<IpsEngine>();
     honeypotManager->setTriggerCallback([this](const std::string& violatorIP, int port) {
         respondToThreat(violatorIP);
         sendNotification("Honeypot Triggered", "Blocked scanning host: " + violatorIP + " on trap port " + to_string(port));
@@ -1218,17 +1219,40 @@ void FirewallManager::processPacket(const string &sourceIP, const string &source
                                     const string &destIP, const string &destPort, int size,
                                     const string &protocol,
                                     double payloadEntropy, double flagAnomaly,
-                                    const string &dnsQueryDomain) {
+                                    const string &dnsQueryDomain,
+                                    const string &payload) {
     string key = sourceIP + ":" + sourcePort + "->" + destIP + ":" + destPort;
     bool triggerThreatResponse = false;
     bool isBlocked = false;
     bool dnsBlocked = false;
+    bool ipsBlocked = false;
+    string ipsMsg = "";
     string status = "Allowed";
 
     {
         lock_guard<mutex> lock(globalMutex);
 
         isBlocked = (blockedIPs.count(sourceIP) > 0) || threatSync->isThreatIP(sourceIP);
+
+        // IPS signature check
+        if (!isBlocked && ipsEngine) {
+            IpsRule matchedRule;
+            int sPort = 0;
+            int dPort = 0;
+            try { sPort = std::stoi(sourcePort); } catch(...) {}
+            try { dPort = std::stoi(destPort); } catch(...) {}
+            if (ipsEngine->inspectPacket(protocol, sourceIP, sPort, destIP, dPort, payload, matchedRule)) {
+                ipsMsg = matchedRule.message;
+                if (matchedRule.action == "drop") {
+                    ipsBlocked = true;
+                    isBlocked = true;
+                    triggerThreatResponse = true;
+                } else {
+                    status = "Flagged";
+                }
+                sendNotification("IPS Signature Triggered", "Rule " + to_string(matchedRule.sid) + ": " + matchedRule.message + " from " + sourceIP);
+            }
+        }
 
         // DNS Sinkhole check
         if (!dnsQueryDomain.empty() && dnsSinkholeEnabled) {
@@ -1297,10 +1321,12 @@ void FirewallManager::processPacket(const string &sourceIP, const string &source
         if (isBlocked) {
             if (dnsBlocked) {
                 status = "Blocked (DNS: " + dnsQueryDomain + ")";
+            } else if (ipsBlocked) {
+                status = "Blocked (IPS: " + ipsMsg + ")";
             } else {
                 status = "Blocked";
             }
-        } else if (flagAnomaly > 0.0 || payloadEntropy > 0.7) {
+        } else if (status == "Flagged" || flagAnomaly > 0.0 || payloadEntropy > 0.7) {
             status = "Flagged";
         } else {
             status = "Allowed";

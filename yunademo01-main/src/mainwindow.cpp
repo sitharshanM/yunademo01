@@ -53,6 +53,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   tabs->addTab(createQosTab(), "QoS Shaper");
   tabs->addTab(createDeviceMapperTab(), "Device Mapper");
   tabs->addTab(createHoneypotTab(), "Active Honeypot");
+  tabs->addTab(createIpsTab(), "IPS Engine");
 
   QTimer *timer = new QTimer(this);
   connect(timer, &QTimer::timeout, [this]() {
@@ -62,6 +63,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
     updateQosTable();
     updateDeviceTable();
     updateHoneypotTab();
+    updateIpsTable();
   });
   timer->start(1000);
 
@@ -71,6 +73,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   updateQosTable();
   updateDeviceTable();
   updateHoneypotTab();
+  updateIpsTable();
 
   QVBoxLayout *mainLayout = new QVBoxLayout;
   mainLayout->addWidget(tabs);
@@ -1565,5 +1568,192 @@ void GUIMainWindow::updateHoneypotTab() {
     honeypotTriggerTable->setItem(i, 1, ipItem);
     honeypotTriggerTable->setItem(i, 2, portItem);
     honeypotTriggerTable->setItem(i, 3, statusItem);
+  }
+}
+
+QWidget *GUIMainWindow::createIpsTab() {
+  QWidget *tab = new QWidget;
+  QVBoxLayout *layout = new QVBoxLayout;
+
+  QLabel *titleLabel = new QLabel("<b>Intrusion Prevention System (IPS) Signature Engine</b>");
+  titleLabel->setStyleSheet("font-size: 14px; margin-bottom: 10px;");
+  layout->addWidget(titleLabel);
+
+  layout->addWidget(new QLabel("<b>Active IPS Rules:</b>"));
+  ipsRulesTable = new QTableWidget;
+  ipsRulesTable->setColumnCount(7);
+  QStringList rulesHeaders;
+  rulesHeaders << "SID" << "Action" << "Proto" << "Source IP/Port" << "Dest IP/Port" << "Alert Message" << "Status";
+  ipsRulesTable->setHorizontalHeaderLabels(rulesHeaders);
+  ipsRulesTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  ipsRulesTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  ipsRulesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  ipsRulesTable->setSelectionMode(QAbstractItemView::SingleSelection);
+  layout->addWidget(ipsRulesTable);
+
+  QHBoxLayout *ruleBtnLayout = new QHBoxLayout;
+  QPushButton *toggleRuleBtn = new QPushButton("Enable/Disable Selected");
+  connect(toggleRuleBtn, &QPushButton::clicked, [this]() {
+    int row = ipsRulesTable->currentRow();
+    if (row >= 0) {
+      int sid = ipsRulesTable->item(row, 0)->text().toInt();
+      auto ips = manager->getIpsEngine();
+      if (ips) {
+        auto rules = ips->getRules();
+        for (const auto& r : rules) {
+          if (r.sid == sid) {
+            ips->toggleRule(sid, !r.enabled);
+            statusText->append(QString("Toggled IPS rule SID %1.").arg(sid));
+            updateIpsTable();
+            break;
+          }
+        }
+      }
+    } else {
+      statusText->append("Error: Select a rule from the table first.");
+    }
+  });
+
+  QPushButton *deleteRuleBtn = new QPushButton("Delete Selected Rule");
+  connect(deleteRuleBtn, &QPushButton::clicked, [this]() {
+    int row = ipsRulesTable->currentRow();
+    if (row >= 0) {
+      int sid = ipsRulesTable->item(row, 0)->text().toInt();
+      auto ips = manager->getIpsEngine();
+      if (ips) {
+        if (ips->deleteRule(sid)) {
+          statusText->append(QString("Deleted IPS rule SID %1.").arg(sid));
+          updateIpsTable();
+        } else {
+          statusText->append("Error: Could not delete rule.");
+        }
+      }
+    } else {
+      statusText->append("Error: Select a rule from the table first.");
+    }
+  });
+
+  ruleBtnLayout->addWidget(toggleRuleBtn);
+  ruleBtnLayout->addWidget(deleteRuleBtn);
+  layout->addLayout(ruleBtnLayout);
+
+  layout->addWidget(new QLabel("<b>Add Snort-Style Rule:</b>"));
+  QHBoxLayout *formLayout = new QHBoxLayout;
+  ipsRuleInput = new QLineEdit;
+  ipsRuleInput->setPlaceholderText("drop tcp any any -> any 80 (msg:\"Forbidden content\"; content:\"malware\"; sid:999;)");
+  QPushButton *addRuleBtn = new QPushButton("Compile & Add Rule");
+  connect(addRuleBtn, &QPushButton::clicked, [this]() {
+    std::string ruleStr = ipsRuleInput->text().toStdString();
+    auto ips = manager->getIpsEngine();
+    if (ips) {
+      if (ips->addRule(ruleStr)) {
+        statusText->append("Successfully compiled and added IPS rule.");
+        ipsRuleInput->clear();
+        updateIpsTable();
+      } else {
+        statusText->append("Error: Failed to compile rule. Verify syntax.");
+      }
+    }
+  });
+  formLayout->addWidget(ipsRuleInput);
+  formLayout->addWidget(addRuleBtn);
+  layout->addLayout(formLayout);
+
+  layout->addWidget(new QLabel("<b>IPS Security Alerts Log:</b>"));
+  ipsAlertsTable = new QTableWidget;
+  ipsAlertsTable->setColumnCount(6);
+  QStringList alertHeaders;
+  alertHeaders << "Timestamp" << "SID" << "Source IP" << "Target Port" << "Message" << "Action";
+  ipsAlertsTable->setHorizontalHeaderLabels(alertHeaders);
+  ipsAlertsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  ipsAlertsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  ipsAlertsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  layout->addWidget(ipsAlertsTable);
+
+  QPushButton *clearAlertsBtn = new QPushButton("Clear Alerts History");
+  connect(clearAlertsBtn, &QPushButton::clicked, [this]() {
+    auto ips = manager->getIpsEngine();
+    if (ips) {
+      ips->clearAlerts();
+      statusText->append("IPS Alerts history cleared.");
+      updateIpsTable();
+    }
+  });
+  layout->addWidget(clearAlertsBtn);
+
+  tab->setLayout(layout);
+  return tab;
+}
+
+void GUIMainWindow::updateIpsTable() {
+  auto ips = manager->getIpsEngine();
+  if (!ips) return;
+
+  auto rules = ips->getRules();
+  ipsRulesTable->setRowCount(0);
+  ipsRulesTable->setRowCount(rules.size());
+
+  for (size_t i = 0; i < rules.size(); ++i) {
+    const auto &rule = rules[i];
+    
+    QTableWidgetItem *sidItem = new QTableWidgetItem(QString::number(rule.sid));
+    QTableWidgetItem *actionItem = new QTableWidgetItem(QString::fromStdString(rule.action));
+    QTableWidgetItem *protoItem = new QTableWidgetItem(QString::fromStdString(rule.protocol));
+    
+    std::string srcStr = rule.srcIp + ":" + (rule.srcPort == 0 ? "any" : std::to_string(rule.srcPort));
+    QTableWidgetItem *srcItem = new QTableWidgetItem(QString::fromStdString(srcStr));
+    
+    std::string destStr = rule.destIp + ":" + (rule.destPort == 0 ? "any" : std::to_string(rule.destPort));
+    QTableWidgetItem *destItem = new QTableWidgetItem(QString::fromStdString(destStr));
+    
+    QTableWidgetItem *msgItem = new QTableWidgetItem(QString::fromStdString(rule.message));
+    
+    QTableWidgetItem *statusItem = new QTableWidgetItem(rule.enabled ? "Active" : "Disabled");
+    if (rule.enabled) {
+      statusItem->setBackground(QBrush(QColor(230, 255, 230)));
+      statusItem->setForeground(QBrush(QColor(0, 150, 0)));
+    } else {
+      statusItem->setBackground(QBrush(QColor(240, 240, 240)));
+      statusItem->setForeground(QBrush(QColor(120, 120, 120)));
+    }
+    
+    ipsRulesTable->setItem(i, 0, sidItem);
+    ipsRulesTable->setItem(i, 1, actionItem);
+    ipsRulesTable->setItem(i, 2, protoItem);
+    ipsRulesTable->setItem(i, 3, srcItem);
+    ipsRulesTable->setItem(i, 4, destItem);
+    ipsRulesTable->setItem(i, 5, msgItem);
+    ipsRulesTable->setItem(i, 6, statusItem);
+  }
+
+  auto alerts = ips->getAlerts();
+  ipsAlertsTable->setRowCount(0);
+  ipsAlertsTable->setRowCount(alerts.size());
+
+  for (size_t i = 0; i < alerts.size(); ++i) {
+    const auto &alert = alerts[i];
+    
+    QTableWidgetItem *timeItem = new QTableWidgetItem(QString::fromStdString(alert.timestamp));
+    QTableWidgetItem *sidItem = new QTableWidgetItem(QString::number(alert.sid));
+    QTableWidgetItem *ipItem = new QTableWidgetItem(QString::fromStdString(alert.violatorIP));
+    QTableWidgetItem *portItem = new QTableWidgetItem(QString::number(alert.targetedPort));
+    QTableWidgetItem *msgItem = new QTableWidgetItem(QString::fromStdString(alert.message));
+    
+    QTableWidgetItem *actItem = new QTableWidgetItem(QString::fromStdString(alert.action));
+    if (alert.action == "Blocked") {
+      actItem->setBackground(QBrush(QColor(255, 230, 230)));
+      actItem->setForeground(QBrush(QColor(200, 0, 0)));
+    } else {
+      actItem->setBackground(QBrush(QColor(255, 245, 220)));
+      actItem->setForeground(QBrush(QColor(200, 100, 0)));
+    }
+    actItem->setTextAlignment(Qt::AlignCenter);
+
+    ipsAlertsTable->setItem(i, 0, timeItem);
+    ipsAlertsTable->setItem(i, 1, sidItem);
+    ipsAlertsTable->setItem(i, 2, ipItem);
+    ipsAlertsTable->setItem(i, 3, portItem);
+    ipsAlertsTable->setItem(i, 4, msgItem);
+    ipsAlertsTable->setItem(i, 5, actItem);
   }
 }

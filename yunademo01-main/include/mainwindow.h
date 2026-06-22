@@ -86,12 +86,18 @@ private:
     QListWidget* trapPortsList;
     QSpinBox* addTrapPortSpin;
 
+    // IPS UI
+    QTableWidget* ipsRulesTable;
+    QTableWidget* ipsAlertsTable;
+    QLineEdit* ipsRuleInput;
+
     void updateVpnTable();
     void updateFeedList();
     void updateThreatSyncStats();
     void updateQosTable();
     void updateDeviceTable();
     void updateHoneypotTab();
+    void updateIpsTable();
 
     QWidget* createBlockTab();
     QWidget* createFirewallTab();
@@ -106,6 +112,7 @@ private:
     QWidget* createQosTab();
     QWidget* createDeviceMapperTab();
     QWidget* createHoneypotTab();
+    QWidget* createIpsTab();
     void updateSnifferGrid();
 };
 

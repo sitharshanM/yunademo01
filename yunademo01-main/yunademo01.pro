@@ -19,7 +19,8 @@ HEADERS += include/Common.h \
            include/ThreatIntelSynchronizer.h \
            include/QosManager.h \
            include/DeviceMapper.h \
-           include/HoneypotManager.h
+           include/HoneypotManager.h \
+           include/IpsEngine.h
 
 SOURCES += src/main.cpp \
            src/Logger.cpp \
@@ -32,7 +33,8 @@ SOURCES += src/main.cpp \
            src/ThreatIntelSynchronizer.cpp \
            src/QosManager.cpp \
            src/DeviceMapper.cpp \
-           src/HoneypotManager.cpp
+           src/HoneypotManager.cpp \
+           src/IpsEngine.cpp
 
 LIBS += -lpcap -lcurl -lreadline
 
