@@ -12,6 +12,7 @@
 #include "HoneypotManager.h"
 #include "IpsEngine.h"
 #include "DpiClassifier.h"
+#include "CaptivePortal.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -50,6 +51,8 @@ private:
     std::unique_ptr<HoneypotManager> honeypotManager;
     std::unique_ptr<IpsEngine> ipsEngine;
     std::unique_ptr<DpiClassifier> dpiClassifier;
+    std::unique_ptr<CaptivePortal> captivePortal;
+    bool captivePortalEnabled = false;
     std::thread threatMonitorThread;
     std::thread maintenanceThread;
     std::condition_variable cv;
@@ -143,6 +146,19 @@ public:
     HoneypotManager* getHoneypotManager() const { return honeypotManager.get(); }
     IpsEngine* getIpsEngine() const { return ipsEngine.get(); }
     DpiClassifier* getDpiClassifier() const { return dpiClassifier.get(); }
+    CaptivePortal* getCaptivePortal() const { return captivePortal.get(); }
+    bool isCaptivePortalEnabled() const { return captivePortalEnabled; }
+    void setCaptivePortalEnabled(bool enabled) {
+        captivePortalEnabled = enabled;
+        if (captivePortal) {
+            if (enabled) {
+                captivePortal->startPortalServer(8082);
+            } else {
+                captivePortal->stopPortalServer();
+            }
+        }
+        saveConfig();
+    }
     std::string getWebhookUrl() const { return webhookUrl; }
     void setWebhookUrl(const std::string& url) { webhookUrl = url; saveConfig(); }
     void setCategorySchedule(const std::string& category, int start, int end, bool enabled);

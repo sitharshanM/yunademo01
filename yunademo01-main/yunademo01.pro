@@ -22,7 +22,8 @@ HEADERS += include/Common.h \
            include/HoneypotManager.h \
            include/IpsEngine.h \
            include/DpiClassifier.h \
-           include/TopologyWidget.h
+           include/TopologyWidget.h \
+           include/CaptivePortal.h
 
 SOURCES += src/main.cpp \
            src/Logger.cpp \
@@ -38,9 +39,11 @@ SOURCES += src/main.cpp \
            src/HoneypotManager.cpp \
            src/IpsEngine.cpp \
            src/DpiClassifier.cpp \
-           src/TopologyWidget.cpp
+           src/TopologyWidget.cpp \
+           src/CaptivePortal.cpp
 
 LIBS += -lpcap -lcurl -lreadline
+win32:LIBS += -lws2_32
 
 CONFIG += c++17
 QMAKE_CXXFLAGS += -std=c++17

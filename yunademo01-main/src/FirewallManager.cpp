@@ -232,6 +232,10 @@ FirewallManager::FirewallManager(const string &interface)
     honeypotManager = std::make_unique<HoneypotManager>();
     ipsEngine = std::make_unique<IpsEngine>();
     dpiClassifier = std::make_unique<DpiClassifier>();
+    captivePortal = std::make_unique<CaptivePortal>(this);
+    if (captivePortalEnabled) {
+        captivePortal->startPortalServer(8082);
+    }
     honeypotManager->setTriggerCallback([this](const std::string& violatorIP, int port) {
         respondToThreat(violatorIP);
         sendNotification("Honeypot Triggered", "Blocked scanning host: " + violatorIP + " on trap port " + to_string(port));
@@ -1239,6 +1243,14 @@ void FirewallManager::processPacket(const string &sourceIP, const string &source
 
         isBlocked = (blockedIPs.count(sourceIP) > 0) || threatSync->isThreatIP(sourceIP);
 
+        // Captive Portal interception check
+        if (!isBlocked && captivePortalEnabled && captivePortal) {
+            if (destPort != "8082" && sourcePort != "8082" && !captivePortal->isClientAuthenticated(sourceIP)) {
+                isBlocked = true;
+                status = "Blocked (Captive Portal Redirect)";
+            }
+        }
+
         // IPS signature check
         if (!isBlocked && ipsEngine) {
             IpsRule matchedRule;
@@ -1336,6 +1348,8 @@ void FirewallManager::processPacket(const string &sourceIP, const string &source
                 status = "Blocked (DNS: " + dnsQueryDomain + ")";
             } else if (ipsBlocked) {
                 status = "Blocked (IPS: " + ipsMsg + ")";
+            } else if (status == "Blocked (Captive Portal Redirect)") {
+                // Keep Captive Portal redirect status
             } else {
                 status = "Blocked";
             }
@@ -1982,6 +1996,9 @@ void FirewallManager::loadConfig() {
         if (j.contains("dns_sinkhole_enabled") && j["dns_sinkhole_enabled"].is_bool()) {
             dnsSinkholeEnabled = j["dns_sinkhole_enabled"].get<bool>();
         }
+        if (j.contains("captive_portal_enabled") && j["captive_portal_enabled"].is_bool()) {
+            captivePortalEnabled = j["captive_portal_enabled"].get<bool>();
+        }
         Logger::log("Configuration loaded.", Logger::INFO);
     } catch (const exception &e) {
         Logger::log("Error loading config: " + string(e.what()), Logger::ERROR);
@@ -2007,6 +2024,7 @@ void FirewallManager::saveConfig() {
     j["knock_target"] = knockTargetPort;
     j["knock_duration"] = knockOpenDurationSeconds;
     j["dns_sinkhole_enabled"] = dnsSinkholeEnabled;
+    j["captive_portal_enabled"] = captivePortalEnabled;
 
     ofstream file(CONFIG_FILE);
     if (file.is_open()) {

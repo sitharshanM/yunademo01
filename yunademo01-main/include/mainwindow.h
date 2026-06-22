@@ -97,6 +97,13 @@ private:
     // Topology UI
     TopologyWidget* topologyWidget;
 
+    // Captive Portal UI
+    QCheckBox* enablePortalCheck;
+    QTableWidget* portalUsersTable;
+    QTableWidget* authSessionsTable;
+    QLineEdit* portalUsernameInput;
+    QLineEdit* portalPasswordInput;
+
     void updateVpnTable();
     void updateFeedList();
     void updateThreatSyncStats();
@@ -106,6 +113,7 @@ private:
     void updateIpsTable();
     void updateDpiTable();
     void updateTopologyTab();
+    void updatePortalTab();
 
     QWidget* createBlockTab();
     QWidget* createFirewallTab();
@@ -123,6 +131,7 @@ private:
     QWidget* createIpsTab();
     QWidget* createDpiTab();
     QWidget* createTopologyTab();
+    QWidget* createPortalTab();
     void updateSnifferGrid();
 };
 

@@ -8,6 +8,7 @@
 #include "HoneypotManager.h"
 #include "DpiClassifier.h"
 #include "TopologyWidget.h"
+#include "CaptivePortal.h"
 #include <QAbstractItemView>
 #include <QBrush>
 #include <QCheckBox>
@@ -58,6 +59,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   tabs->addTab(createIpsTab(), "IPS Engine");
   tabs->addTab(createDpiTab(), "DPI Analytics");
   tabs->addTab(createTopologyTab(), "Network Topology");
+  tabs->addTab(createPortalTab(), "Captive Portal");
 
   QTimer *timer = new QTimer(this);
   connect(timer, &QTimer::timeout, [this]() {
@@ -70,6 +72,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
     updateIpsTable();
     updateDpiTable();
     updateTopologyTab();
+    updatePortalTab();
   });
   timer->start(1000);
 
@@ -82,6 +85,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   updateIpsTable();
   updateDpiTable();
   updateTopologyTab();
+  updatePortalTab();
 
   QVBoxLayout *mainLayout = new QVBoxLayout;
   mainLayout->addWidget(tabs);
@@ -1890,5 +1894,165 @@ QWidget *GUIMainWindow::createTopologyTab() {
 void GUIMainWindow::updateTopologyTab() {
   if (topologyWidget) {
     topologyWidget->updateTopology();
+  }
+}
+
+QWidget *GUIMainWindow::createPortalTab() {
+  QWidget *tab = new QWidget;
+  QVBoxLayout *layout = new QVBoxLayout;
+
+  QLabel *titleLabel = new QLabel("<b>Captive Portal Configuration & Active Sessions</b>");
+  titleLabel->setStyleSheet("font-size: 14px; margin-bottom: 5px;");
+  layout->addWidget(titleLabel);
+
+  QLabel *descLabel = new QLabel("<i>Enforce network authentication. When active, all HTTP traffic from unauthenticated devices is intercepted and redirected to the portal login gateway.</i>");
+  descLabel->setStyleSheet("margin-bottom: 10px; color: #555;");
+  layout->addWidget(descLabel);
+
+  // High-level config card
+  QHBoxLayout *configLayout = new QHBoxLayout;
+  enablePortalCheck = new QCheckBox("Enable Captive Portal Network Interception", this);
+  enablePortalCheck->setChecked(manager->isCaptivePortalEnabled());
+  enablePortalCheck->setStyleSheet("font-weight: bold; font-size: 12px;");
+  connect(enablePortalCheck, &QCheckBox::clicked, [this](bool checked) {
+    manager->setCaptivePortalEnabled(checked);
+    statusText->append(QString("Captive Portal is now %1.").arg(checked ? "ENABLED" : "DISABLED"));
+    updatePortalTab();
+  });
+  configLayout->addWidget(enablePortalCheck);
+  configLayout->addStretch();
+  layout->addLayout(configLayout);
+
+  // Main area containing two vertical columns
+  QHBoxLayout *mainColumns = new QHBoxLayout;
+
+  // LEFT COLUMN: Active Sessions
+  QVBoxLayout *leftCol = new QVBoxLayout;
+  leftCol->addWidget(new QLabel("<b>Authenticated Active Sessions:</b>"));
+
+  authSessionsTable = new QTableWidget;
+  authSessionsTable->setColumnCount(4);
+  QStringList sessionHeaders;
+  sessionHeaders << "Client IP" << "Username" << "Login Time" << "Action";
+  authSessionsTable->setHorizontalHeaderLabels(sessionHeaders);
+  authSessionsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  authSessionsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  authSessionsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  leftCol->addWidget(authSessionsTable);
+  mainColumns->addLayout(leftCol, 3); // 3 parts width
+
+  // RIGHT COLUMN: Authorized Users Database & Add Form
+  QVBoxLayout *rightCol = new QVBoxLayout;
+  rightCol->addWidget(new QLabel("<b>Authorized Users Database:</b>"));
+
+  portalUsersTable = new QTableWidget;
+  portalUsersTable->setColumnCount(3);
+  QStringList userHeaders;
+  userHeaders << "Username" << "Role" << "Action";
+  portalUsersTable->setHorizontalHeaderLabels(userHeaders);
+  portalUsersTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  portalUsersTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  portalUsersTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  rightCol->addWidget(portalUsersTable);
+
+  // Add User Form
+  rightCol->addWidget(new QLabel("<b>Add Authorized User:</b>"));
+  QHBoxLayout *formLayout = new QHBoxLayout;
+  
+  portalUsernameInput = new QLineEdit;
+  portalUsernameInput->setPlaceholderText("Username");
+  
+  portalPasswordInput = new QLineEdit;
+  portalPasswordInput->setPlaceholderText("Password");
+  portalPasswordInput->setEchoMode(QLineEdit::Password);
+
+  QPushButton *addUserBtn = new QPushButton("Add User");
+  connect(addUserBtn, &QPushButton::clicked, [this]() {
+    QString user = portalUsernameInput->text().trimmed();
+    QString pass = portalPasswordInput->text().trimmed();
+    if (user.isEmpty() || pass.isEmpty()) {
+      statusText->append("Error: Username and Password cannot be empty.");
+      return;
+    }
+    auto portal = manager->getCaptivePortal();
+    if (portal) {
+      if (portal->addUser(user.toStdString(), pass.toStdString())) {
+        statusText->append(QString("Successfully added portal user: %1").arg(user));
+        portalUsernameInput->clear();
+        portalPasswordInput->clear();
+        updatePortalTab();
+      } else {
+        statusText->append("Error: User already exists or failed to add.");
+      }
+    }
+  });
+
+  formLayout->addWidget(portalUsernameInput);
+  formLayout->addWidget(portalPasswordInput);
+  formLayout->addWidget(addUserBtn);
+  rightCol->addLayout(formLayout);
+
+  mainColumns->addLayout(rightCol, 2); // 2 parts width
+
+  layout->addLayout(mainColumns);
+  tab->setLayout(layout);
+  return tab;
+}
+
+void GUIMainWindow::updatePortalTab() {
+  auto portal = manager->getCaptivePortal();
+  if (!portal) return;
+
+  // Sync checkbox state
+  enablePortalCheck->setChecked(manager->isCaptivePortalEnabled());
+
+  // Update sessions table
+  auto sessions = portal->getSessions();
+  authSessionsTable->setRowCount(0);
+  for (size_t i = 0; i < sessions.size(); ++i) {
+    authSessionsTable->insertRow(i);
+    authSessionsTable->setItem(i, 0, new QTableWidgetItem(QString::fromStdString(sessions[i].ip)));
+    authSessionsTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(sessions[i].username)));
+    authSessionsTable->setItem(i, 2, new QTableWidgetItem(QString::fromStdString(sessions[i].loginTime)));
+
+    std::string ip = sessions[i].ip;
+    QPushButton *revokeBtn = new QPushButton("Revoke");
+    connect(revokeBtn, &QPushButton::clicked, [this, ip]() {
+      auto p = manager->getCaptivePortal();
+      if (p) {
+        p->revokeClient(ip);
+        statusText->append(QString("Revoked authentication session for IP %1.").arg(QString::fromStdString(ip)));
+        updatePortalTab();
+      }
+    });
+    authSessionsTable->setCellWidget(i, 3, revokeBtn);
+  }
+
+  // Update users table
+  auto users = portal->getUsers();
+  portalUsersTable->setRowCount(0);
+  for (size_t i = 0; i < users.size(); ++i) {
+    portalUsersTable->insertRow(i);
+    portalUsersTable->setItem(i, 0, new QTableWidgetItem(QString::fromStdString(users[i].username)));
+    portalUsersTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(users[i].role)));
+
+    std::string username = users[i].username;
+    QPushButton *deleteBtn = new QPushButton("Delete");
+    if (username == "admin") {
+      deleteBtn->setEnabled(false);
+    } else {
+      connect(deleteBtn, &QPushButton::clicked, [this, username]() {
+        auto p = manager->getCaptivePortal();
+        if (p) {
+          if (p->removeUser(username)) {
+            statusText->append(QString("Deleted portal user: %1").arg(QString::fromStdString(username)));
+            updatePortalTab();
+          } else {
+            statusText->append("Error: Failed to delete user.");
+          }
+        }
+      });
+    }
+    portalUsersTable->setCellWidget(i, 2, deleteBtn);
   }
 }
