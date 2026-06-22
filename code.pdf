@@ -1,0 +1,142 @@
+#include <iostream>
+#include <string>
+#include <vector>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
+#include <openssl/hmac.h>
+#include <sstream>
+class MarsCrypto {
+private:
+const int KEY_LEN = 16; // CAST-128 key size: 128-bit
+const int IV_LEN = 8; // CAST-128 block size
+const int SALT_LEN = 16;
+const int HMAC_LEN = 32; // SHA-256 output
+const int PBKDF2_ITERATIONS = 100000;
+std::string key;
+std::string base64_encode(const std::vector<unsigned char>& data) {
+const std::string base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+std::string result;
+int val = 0, valb = -6;
+for (unsigned char c : data) {
+val = (val << 8) + c;
+valb += 8;
+while (valb >= 0) {
+result.push_back(base64_chars[(val >> valb) & 0x3F]);
+valb -= 6;
+            }
+        }
+if (valb > -6) result.push_back(base64_chars[((val << 8) >> (valb + 8)) & 0x3F]);
+while (result.size() % 4) result.push_back('=');
+return result;
+    }
+std::vector<unsigned char> base64_decode(const std::string& data) {
+const std::string base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+std::vector<unsigned char> result;
+std::vector<int> T(256, -1);
+for (int i = 0; i < 64; i++) T[base64_chars[i]] = i;
+int val = 0, valb = -8;
+for (char c : data) {
+if (c == '=') break;
+if (T[c] == -1) continue;
+val = (val << 6) + T[c];
+valb += 6;
+if (valb >= 0) {
+result.push_back((val >> valb) & 0xFF);
+valb -= 8;
+            }
+        }
+return result;
+    }
+void derive_key(const std::string& password, const unsigned char* salt, unsigned char* out_key) {
+PKCS5_PBKDF2_HMAC(password.c_str(), password.size(), salt, SALT_LEN,
+PBKDF2_ITERATIONS, EVP_sha256(), KEY_LEN, out_key);
+    }
+public:
+MarsCrypto(const std::string& key = "MartianOrbit2025") : key(key) {}
+std::string encrypt(const std::string& plaintext) {
+unsigned char salt[SALT_LEN];
+unsigned char iv[IV_LEN];
+unsigned char key_bytes[KEY_LEN];
+RAND_bytes(salt, SALT_LEN);
+RAND_bytes(iv, IV_LEN);
+derive_key(key, salt, key_bytes);
+EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+std::vector<unsigned char> ciphertext(plaintext.size() + EVP_MAX_BLOCK_LENGTH);
+int len, ciphertext_len;
+EVP_EncryptInit_ex(ctx, EVP_cast5_cbc(), NULL, key_bytes, iv);
+EVP_EncryptUpdate(ctx, ciphertext.data(), &len, reinterpret_cast<const unsigned char*>(plaintext.data()), plaintext.size());
+ciphertext_len = len;
+EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len);
+ciphertext_len += len;
+EVP_CIPHER_CTX_free(ctx);
+        // HMAC for integrity
+std::vector<unsigned char> hmac = std::vector<unsigned char>(HMAC_LEN);
+HMAC(EVP_sha256(), key_bytes, KEY_LEN, ciphertext.data(), ciphertext_len, hmac.data(), NULL);
+        // Final payload: salt + iv + ciphertext + hmac
+std::vector<unsigned char> final_data;
+final_data.insert(final_data.end(), salt, salt + SALT_LEN);
+final_data.insert(final_data.end(), iv, iv + IV_LEN);
+final_data.insert(final_data.end(), ciphertext.begin(), ciphertext.begin() + ciphertext_len);
+final_data.insert(final_data.end(), hmac.begin(), hmac.end());
+return base64_encode(final_data);
+    }
+std::string decrypt(const std::string& base64_ciphertext) {
+std::vector<unsigned char> data = base64_decode(base64_ciphertext);
+if (data.size() < SALT_LEN + IV_LEN + HMAC_LEN) {
+throw std::runtime_error("Invalid input data");
+        }
+unsigned char* salt = data.data();
+unsigned char* iv = salt + SALT_LEN;
+unsigned char* ciphertext = iv + IV_LEN;
+size_t ciphertext_len = data.size() - SALT_LEN - IV_LEN - HMAC_LEN;
+unsigned char* hmac_received = data.data() + data.size() - HMAC_LEN;
+unsigned char key_bytes[KEY_LEN];
+derive_key(key, salt, key_bytes);
+        // Verify HMAC
+unsigned char hmac_calculated[HMAC_LEN];
+HMAC(EVP_sha256(), key_bytes, KEY_LEN, ciphertext, ciphertext_len, hmac_calculated, NULL);
+if (CRYPTO_memcmp(hmac_calculated, hmac_received, HMAC_LEN) != 0) {
+throw std::runtime_error("HMAC verification failed - data was modified");
+        }
+        // Decrypt
+EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+std::vector<unsigned char> plaintext(ciphertext_len + EVP_MAX_BLOCK_LENGTH);
+int len, plaintext_len;
+EVP_DecryptInit_ex(ctx, EVP_cast5_cbc(), NULL, key_bytes, iv);
+EVP_DecryptUpdate(ctx, plaintext.data(), &len, ciphertext, ciphertext_len);
+plaintext_len = len;
+if (EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len) <= 0) {
+EVP_CIPHER_CTX_free(ctx);
+throw std::runtime_error("Decryption failed - bad padding");
+        }
+plaintext_len += len;
+EVP_CIPHER_CTX_free(ctx);
+return std::string(plaintext.begin(), plaintext.begin() + plaintext_len);
+    }
+};
+// ---------------- Main ------------------
+int main() {
+MarsCrypto crypto;
+std::string input;
+std::cout << "Enter text to encrypt (Mars CAST128): ";
+std::getline(std::cin, input);
+if (input.empty()) input = "Exploring the Red Planet!";
+std::string encrypted = crypto.encrypt(input);
+std::cout << "Encrypted (Base64): " << encrypted << std::endl;
+std::cout << "\nPaste encrypted text to decrypt: ";
+std::getline(std::cin, input);
+if (!input.empty()) {
+try {
+std::string decrypted = crypto.decrypt(input);
+std::cout << "Decrypted: " << decrypted << std::endl;
+        } catch (const std::exception& e) {
+std::cerr << "Error: " << e.what() << std::endl;
+        }
+    } else {
+std::cout << "No input provided for decryption." << std::endl;
+    }
+return 0;
+}
+ 
+give the gui for this and as single file
