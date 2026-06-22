@@ -1,195 +1,123 @@
-# YUNA Firewall Management System
+# YUNA Firewall
 
-## Overview
-The YUNA Firewall Management System is a robust and intelligent firewall solution designed to monitor, manage, and secure network traffic. It integrates advanced features such as neural network-based threat detection, domain blocking, and VPN management.
+![YUNA Firewall](https://img.shields.io/badge/Status-Active-brightgreen)
+![C++17](https://img.shields.io/badge/C++-17-blue.svg)
+![Qt](https://img.shields.io/badge/Qt-5%20%7C%206-41cd52.svg)
 
-## Features
-- **Neural Network-Based Threat Detection**: Detects suspicious network activity using a trained neural network.
-- **Domain and IP Blocking**: Block specific domains, categories, or IP addresses.
-- **VPN Management**: Connect to and disconnect from VPNs.
-- **Firewall Rule Management**: Add, remove, and optimize firewall rules.
-- **GeoIP Lookup**: Retrieve geographical information for IP addresses.
-- **Logging and Notifications**: Detailed logging with log rotation and desktop notifications.
-- **CLI Interface**: Interactive command-line interface for managing the firewall.
+YUNA Firewall is an advanced, multi-threaded Network Security and Management platform. Built using modern **C++17** and the **Qt Framework**, it features real-time network topology visualization, advanced threat intelligence, deep packet inspection, an intrusion prevention system, and a robust Web Application Firewall (WAF).
 
-## Installation
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   ```
-2. Navigate to the project directory:
-   ```bash
-   cd yunademo01
-   ```
-3. Install dependencies:
-   - Ensure `libpcap`, `libcurl`, and `readline` libraries are installed.
-   - Install the required packages:
-     ```bash
-     sudo apt-get install libpcap-dev libcurl4-openssl-dev libreadline-dev
-     ```
-4. Compile the project:
-   ```bash
-   g++ -std=c++17 -o yuna_firewall yuna1.cpp -lpcap -lcurl -lreadline -lpthread
-   ```
+---
 
-## Usage
-1. Run the program:
-   ```bash
-   ./yuna_firewall
-   ```
-2. Use the CLI commands to manage the firewall. Type `help` to see available commands.
+## 🌟 Core Features
 
-## CLI Commands
-- `block-ip <ip>`: Block an IP address.
-- `unblock-ip <ip>`: Unblock an IP address.
-- `block-domain <domain> [category]`: Block a domain with an optional category.
-- `unblock-domain <domain>`: Unblock a domain.
-- `block-category <category>`: Block all domains in a category.
-- `unblock-category <category>`: Unblock all domains in a category.
-- `connect-vpn <config_path>`: Connect to a VPN using the specified configuration file.
-- `disconnect-vpn`: Disconnect from the VPN.
-- `check-internet`: Check internet connectivity.
-- `detect-threat`: Check if a threat is detected.
-- `status`: Display the current system status.
-- `help`: Display the help menu.
+### 1. Dynamic Network Topology Graphic Mapper
+Visualizes your network in real-time. Nodes (IPs) and edges (connections) are dynamically mapped onto a smooth Qt Graphics Scene with active traffic flow animations. 
 
-## Configuration Files
-- `blocked_ips.json`: Stores the list of blocked IPs.
-- `blocked_domains.json`: Stores the list of blocked domains and their categories.
-- `neural_model.json`: Stores the trained neural network model.
+### 2. Deep Packet Inspection (DPI)
+Breaks down packets beyond the traditional OSI layer 3/4 headers. It analyzes application-layer data to identify specific protocols including **HTTP, HTTPS (TLS), DNS, and SSH**.
 
-## Technical Details
-- **Programming Language**: C++
-- **Libraries Used**:
-  - `libpcap`: For packet sniffing.
-  - `libcurl`: For making HTTP requests.
-  - `readline`: For interactive CLI.
-  - `nlohmann/json`: For JSON parsing.
-- **Neural Network**:
-  - Input: 4 features (packet rate, packet size, connection duration, port number).
-  - Architecture: 2 hidden layers with dropout.
-  - Output: Threat probability.
+### 3. Intrusion Prevention System (IPS)
+Employs the ultra-fast **Boyer-Moore string search algorithm** to rapidly scan packet payloads against a database of known malicious signatures. It actively drops malicious packets.
 
-## Logging
-Logs are stored in `~/FirewallManagerLogs/firewall_manager.log`. Logs are rotated when they exceed 10 MB.
+### 4. Captive Portal
+A built-in HTTP server that forces unauthenticated network users to a login page before granting internet access. Designed for secure guest network management.
 
-## License
-This project is licensed under the MIT License. See the LICENSE file for details.
+### 5. Web Application Firewall (WAF) & Reverse Proxy
+A custom multi-threaded reverse proxy server that sits in front of web applications. It inspects incoming HTTP requests for:
+- SQL Injection (SQLi)
+- Cross-Site Scripting (XSS)
+- Path Traversal Attacks
+- OS Command Injection
 
-## Contributing
-Contributions are welcome! Please fork the repository and submit a pull request.
+### 6. Additional Security Layers
+- **Threat Intelligence Synchronizer:** Keeps malicious IP lists and signatures updated.
+- **Honeypot Manager:** Deploys decoy servers to trap attackers.
+- **QoS Manager:** Manages bandwidth limits and network traffic prioritization.
+- **VPN Pool Manager:** Handles secure virtual private network tunneling configurations.
 
-## Support
-For issues or questions, please open an issue in the repository or contact the maintainer.
+---
 
-# Technical Documentation
+## 🏗️ Architecture & Code Structure
 
-## System Architecture
-The YUNA Firewall Management System is designed with modular components to ensure scalability, maintainability, and performance. Below is an overview of the system's architecture:
+The application is modular and heavily multi-threaded to ensure the GUI remains highly responsive while doing intense packet processing.
 
-### Components
-1. **Neural Network**:
-   - Implements a multi-layer perceptron for threat detection.
-   - Features:
-     - Input: Packet rate, packet size, connection duration, port number.
-     - Hidden Layers: Two layers with dropout regularization.
-     - Output: Probability of a threat.
-   - Trained using backpropagation with a mean squared error loss function.
+*   **`FirewallManager` (`src/FirewallManager.cpp`):** The central controller. It owns and orchestrates all the individual subsystem engines (IPS, WAF, DPI, Sniffer) and controls the global state and configuration via thread-safe mutexes.
+*   **`PacketSniffer` (`src/PacketSniffer.cpp`):** Uses `libpcap` to capture raw network traffic from the Network Interface Card (NIC). Runs on a dedicated background thread.
+*   **`mainwindow` (`src/mainwindow.cpp`):** The Qt GUI. Contains the layouts, tabs, charts, and tables for real-time visualization. Connects via Qt Signals and Slots to update the UI safely from background threads.
+*   **Cross-Platform Sockets:** Network code (`WafProxy`, `CaptivePortal`) uses preprocessor directives (`#ifdef _WIN32`) to utilize **Winsock** on Windows and **POSIX** sockets on Linux.
 
-2. **Packet Sniffer**:
-   - Captures live network traffic using `libpcap`.
-   - Filters packets based on IP protocol.
-   - Extracts source/destination IPs, ports, and packet size.
+---
 
-3. **Firewall Manager**:
-   - Manages firewall rules using `firewalld` commands.
-   - Supports blocking/unblocking of IPs, domains, and categories.
-   - Provides NAT rule management.
+## 🚀 Installation & Setup Guide
 
-4. **Threat Intelligence Integrator**:
-   - Queries external threat intelligence APIs to validate IPs.
-   - Example API: `https://api.threatintel.example.com`.
+### 🐧 Linux (Debian / Ubuntu)
 
-5. **Logger**:
-   - Logs system events with encryption.
-   - Supports log rotation when file size exceeds 10 MB.
+Building on Linux is highly streamlined via the package manager.
 
-6. **CLI Interface**:
-   - Interactive command-line interface for user interaction.
-   - Provides autocompletion and help commands.
+**1. Install Prerequisites:**
+```bash
+sudo apt update
+sudo apt install build-essential qtbase5-dev qt5-qmake libpcap-dev libcurl4-openssl-dev libreadline-dev
+```
 
-## Data Flow
-1. **Packet Capture**:
-   - The `PacketSniffer` captures packets and forwards them to the `FirewallManager`.
-2. **Feature Extraction**:
-   - The `FirewallManager` extracts features (e.g., packet rate, size) from the connection state.
-3. **Threat Detection**:
-   - The `NeuralNetwork` processes the features and outputs a threat probability.
-   - If the probability exceeds the threshold, the connection is flagged as a threat.
-4. **Response**:
-   - The `FirewallManager` blocks the IP or domain associated with the threat.
-   - Notifications are sent to the user.
+**2. Compile:**
+```bash
+cd yunademo01-main
+qmake yunademo01.pro
+make -j4
+```
 
-## Key Algorithms
-### Neural Network Training
-- **Forward Propagation**:
-  - Computes activations for each layer using the sigmoid activation function.
-- **Backpropagation**:
-  - Updates weights and biases using gradient descent.
-  - Learning rate: `0.01`.
-- **Dropout Regularization**:
-  - Randomly sets a fraction of activations to zero during training to prevent overfitting.
+**3. Run (Requires Root for Packet Sniffing):**
+```bash
+sudo ./yunademo01
+```
 
-### Packet Processing
-1. Parse packet headers to extract IPs, ports, and protocol.
-2. Update connection state (e.g., packet count, total bytes).
-3. Detect anomalies (e.g., large packets, high connection rates).
-4. Forward features to the neural network for threat detection.
+---
 
-## Configuration
-### Constants
-- `TIMEOUT_SECONDS`: 3600 (1 hour).
-- `THREAT_THRESHOLD`: 0.7 (probability threshold for threats).
-- `PACKET_RATE_THRESHOLD`: 100 packets/second.
-- `AVERAGE_PACKET_SIZE`: 512 bytes.
-- `MODEL_FILE`: `neural_model.json` (path to the saved model).
+### 🪟 Windows Setup
 
-### Files
-- `blocked_ips.json`: Stores blocked IPs.
-- `blocked_domains.json`: Stores blocked domains and their categories.
-- `firewall_manager.log`: Stores logs.
+Windows requires manual linking of network and web dependencies inside Qt Creator.
 
-## API Integration
-### Threat Intelligence API
-- **Endpoint**: `https://api.threatintel.example.com/query`
-- **Method**: `GET`
-- **Headers**:
-  - `Authorization: Bearer <API_KEY>`
-- **Response**:
-  ```json
-  {
-    "ip": "192.168.1.1",
-    "threat": true
-  }
-  ```
+**1. Development Environment:**
+*   Install [Qt Open Source](https://www.qt.io/download). Make sure to include the **MinGW 64-bit** compiler during setup.
 
-## Error Handling
-- **Packet Sniffer**:
-  - Logs errors if the network interface cannot be opened.
-- **Firewall Commands**:
-  - Logs warnings if a command fails.
-- **Neural Network**:
-  - Validates input dimensions before training.
+**2. Install Dependencies:**
+*   **Npcap:** Download and install [Npcap](https://npcap.com/#download). **Must check the box:** *"Install Npcap in WinPcap API-compatible Mode"*.
+*   **Npcap SDK:** Download the Npcap SDK. Extract it to a known location (e.g., `C:\npcap-sdk`).
+*   **cURL:** Download the libcurl development headers/libs for MinGW.
 
-## Future Enhancements
-1. **Web Interface**:
-   - Develop a web-based dashboard for managing the firewall.
-2. **Advanced Threat Detection**:
-   - Integrate machine learning models for anomaly detection.
-3. **Real-Time Alerts**:
-   - Send email or SMS notifications for critical threats.
-4. **Multi-Platform Support**:
-   - Extend compatibility to Windows and macOS.
+**3. Configure Qt Creator:**
+Open `yunademo01.pro` in Qt Creator and update the `INCLUDEPATH` and `LIBS` to point to where you extracted the Npcap SDK and cURL.
+```pro
+INCLUDEPATH += "C:/path/to/npcap-sdk/Include"
+INCLUDEPATH += "C:/path/to/curl/include"
 
-## Contact
-For technical support, please contact the maintainer at `support@example.com`.
+LIBS += -L"C:/path/to/npcap-sdk/Lib/x64" -lpcap
+LIBS += -L"C:/path/to/curl/lib" -lcurl
+```
+
+**4. Run (Requires Administrator):**
+*   Right-click the Qt Creator icon and select **Run as Administrator**.
+*   Open the project, configure with the MinGW kit, and press the green Run button.
+
+---
+
+## 🖥️ User Guide
+
+Once the application launches with elevated privileges (root/admin):
+
+1.  **Dashboard:** The main dashboard provides an overview of active connections, dropped packets, and threat statistics.
+2.  **Topology:** Navigate to the `Topology` tab to see a real-time, animated node graph of IPs communicating across your network.
+3.  **WAF Configuration:** Go to the `WAF Settings` tab to modify the Reverse Proxy Target Port, edit security rules, and view blocked injection attempts.
+4.  **DPI & IPS:** The `Threats/DPI` tab shows real-time protocol breakdown and logs of packets dropped by the Boyer-Moore IPS scanner.
+5.  **Captive Portal:** Can be toggled on/off to force local network users to authenticate on port 8082 before traffic is routed.
+
+---
+
+## 🛠️ Built With
+*   [Qt](https://www.qt.io/) - GUI Framework
+*   [libpcap/Npcap](https://www.tcpdump.org/) - Network Packet Capture
+*   [libcurl](https://curl.se/) - Client URL Request Library
+
+## 📄 License
+This project is proprietary and confidential.
