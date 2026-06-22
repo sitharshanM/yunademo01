@@ -16,6 +16,7 @@
 #include <QColor>
 #include <QComboBox>
 #include <QFileDialog>
+#include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
