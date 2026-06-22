@@ -9,6 +9,7 @@
 #include "DpiClassifier.h"
 #include "TopologyWidget.h"
 #include "CaptivePortal.h"
+#include "WafProxy.h"
 #include <QAbstractItemView>
 #include <QBrush>
 #include <QCheckBox>
@@ -60,6 +61,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   tabs->addTab(createDpiTab(), "DPI Analytics");
   tabs->addTab(createTopologyTab(), "Network Topology");
   tabs->addTab(createPortalTab(), "Captive Portal");
+  tabs->addTab(createWafTab(), "WAF & Proxy");
 
   QTimer *timer = new QTimer(this);
   connect(timer, &QTimer::timeout, [this]() {
@@ -73,6 +75,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
     updateDpiTable();
     updateTopologyTab();
     updatePortalTab();
+    updateWafTab();
   });
   timer->start(1000);
 
@@ -86,6 +89,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   updateDpiTable();
   updateTopologyTab();
   updatePortalTab();
+  updateWafTab();
 
   QVBoxLayout *mainLayout = new QVBoxLayout;
   mainLayout->addWidget(tabs);
@@ -2054,5 +2058,251 @@ void GUIMainWindow::updatePortalTab() {
       });
     }
     portalUsersTable->setCellWidget(i, 2, deleteBtn);
+  }
+}
+
+QWidget *GUIMainWindow::createWafTab() {
+  QWidget *tab = new QWidget;
+  QVBoxLayout *layout = new QVBoxLayout;
+
+  QLabel *titleLabel = new QLabel("<b>Web Application Firewall (WAF) & Reverse Proxy Dashboard</b>");
+  titleLabel->setStyleSheet("font-size: 14px; margin-bottom: 5px;");
+  layout->addWidget(titleLabel);
+
+  QLabel *descLabel = new QLabel("<i>Inspect incoming HTTP streams for SQL Injection, XSS, Path Traversal, and Command Injection. Proxies clean traffic to the backend server.</i>");
+  descLabel->setStyleSheet("margin-bottom: 10px; color: #555;");
+  layout->addWidget(descLabel);
+
+  // Configuration Card
+  QFrame *configFrame = new QFrame(this);
+  configFrame->setFrameShape(QFrame::StyledPanel);
+  configFrame->setStyleSheet("QFrame { background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; } QLabel { border: none; } QCheckBox { border: none; } QLineEdit { border: 1px solid #ced4da; padding: 4px; border-radius: 4px; }");
+  
+  QHBoxLayout *configLayout = new QHBoxLayout(configFrame);
+  enableWafCheck = new QCheckBox("Enable WAF Reverse Proxy", this);
+  enableWafCheck->setChecked(manager->isWafEnabled());
+  enableWafCheck->setStyleSheet("font-weight: bold; font-size: 12px;");
+  connect(enableWafCheck, &QCheckBox::clicked, [this](bool checked) {
+    manager->setWafEnabled(checked);
+    statusText->append(QString("WAF Reverse Proxy is now %1.").arg(checked ? "ENABLED" : "DISABLED"));
+    updateWafTab();
+  });
+  configLayout->addWidget(enableWafCheck);
+  configLayout->addSpacing(20);
+
+  configLayout->addWidget(new QLabel("Listen Port:"));
+  wafPortInput = new QLineEdit;
+  wafPortInput->setFixedWidth(60);
+  wafPortInput->setText(QString::number(manager->getWafListenPort()));
+  configLayout->addWidget(wafPortInput);
+
+  configLayout->addWidget(new QLabel("Backend Target IP:"));
+  wafBackendHostInput = new QLineEdit;
+  wafBackendHostInput->setFixedWidth(100);
+  wafBackendHostInput->setText(QString::fromStdString(manager->getWafBackendHost()));
+  configLayout->addWidget(wafBackendHostInput);
+
+  configLayout->addWidget(new QLabel("Backend Port:"));
+  wafBackendPortInput = new QLineEdit;
+  wafBackendPortInput->setFixedWidth(60);
+  wafBackendPortInput->setText(QString::number(manager->getWafBackendPort()));
+  configLayout->addWidget(wafBackendPortInput);
+
+  QPushButton *applyConfigBtn = new QPushButton("Apply Settings");
+  connect(applyConfigBtn, &QPushButton::clicked, [this]() {
+    int port = wafPortInput->text().toInt();
+    std::string bHost = wafBackendHostInput->text().toStdString();
+    int bPort = wafBackendPortInput->text().toInt();
+    if (port <= 0 || bPort <= 0 || bHost.empty()) {
+      statusText->append("Error: Invalid configuration parameters.");
+      return;
+    }
+    manager->setWafListenPort(port);
+    manager->setWafBackendHost(bHost);
+    manager->setWafBackendPort(bPort);
+    statusText->append("WAF settings updated.");
+    if (manager->isWafEnabled()) {
+      auto proxy = manager->getWafProxy();
+      if (proxy) {
+        proxy->stopServer();
+        proxy->startServer(port, bHost, bPort);
+        statusText->append("WAF reverse proxy server restarted.");
+      }
+    }
+    updateWafTab();
+  });
+  configLayout->addWidget(applyConfigBtn);
+  configLayout->addStretch();
+  layout->addWidget(configFrame);
+
+  // Statistics Display Cards Grid
+  QFrame *statsFrame = new QFrame(this);
+  statsFrame->setFrameShape(QFrame::StyledPanel);
+  statsFrame->setStyleSheet("QFrame { background-color: #2b2b2b; border: none; border-radius: 6px; } QLabel { color: #fff; border: none; }");
+  QGridLayout *statsGrid = new QGridLayout(statsFrame);
+
+  wafTotalReqLabel = new QLabel("<b>Total Requests:</b> 0");
+  wafBlockedReqLabel = new QLabel("<b>Blocked Attacks:</b> 0");
+  sqliCountLabel = new QLabel("<b>SQL Injection:</b> 0");
+  xssCountLabel = new QLabel("<b>Cross-Site Scripting:</b> 0");
+  traversalCountLabel = new QLabel("<b>Path Traversal:</b> 0");
+  cmdInjectionCountLabel = new QLabel("<b>Command Injection:</b> 0");
+
+  statsGrid->addWidget(wafTotalReqLabel, 0, 0);
+  statsGrid->addWidget(wafBlockedReqLabel, 0, 1);
+  statsGrid->addWidget(sqliCountLabel, 0, 2);
+  statsGrid->addWidget(xssCountLabel, 1, 0);
+  statsGrid->addWidget(traversalCountLabel, 1, 1);
+  statsGrid->addWidget(cmdInjectionCountLabel, 1, 2);
+  layout->addWidget(statsFrame);
+
+  // Main columns
+  QHBoxLayout *mainColumns = new QHBoxLayout;
+
+  // LEFT COLUMN: Violation Logs
+  QVBoxLayout *leftCol = new QVBoxLayout;
+  leftCol->addWidget(new QLabel("<b>Live Violation & Access Logs:</b>"));
+
+  wafLogsTable = new QTableWidget;
+  wafLogsTable->setColumnCount(6);
+  QStringList logHeaders;
+  logHeaders << "Timestamp" << "Client IP" << "Method" << "URL" << "Attack Class" << "Action";
+  wafLogsTable->setHorizontalHeaderLabels(logHeaders);
+  wafLogsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  wafLogsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  wafLogsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  leftCol->addWidget(wafLogsTable);
+
+  QPushButton *clearLogsBtn = new QPushButton("Clear Logs");
+  connect(clearLogsBtn, &QPushButton::clicked, [this]() {
+    auto proxy = manager->getWafProxy();
+    if (proxy) {
+      proxy->clearLogs();
+      statusText->append("WAF Reverse Proxy logs cleared.");
+      updateWafTab();
+    }
+  });
+  leftCol->addWidget(clearLogsBtn);
+  mainColumns->addLayout(leftCol, 3); // 3 parts width
+
+  // RIGHT COLUMN: Signatures/Rules Table & Add rule
+  QVBoxLayout *rightCol = new QVBoxLayout;
+  rightCol->addWidget(new QLabel("<b>Custom Inspection Signatures:</b>"));
+
+  wafRulesTable = new QTableWidget;
+  wafRulesTable->setColumnCount(3);
+  QStringList rulesHeaders;
+  rulesHeaders << "ID" << "Pattern" << "Action";
+  wafRulesTable->setHorizontalHeaderLabels(rulesHeaders);
+  wafRulesTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  wafRulesTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  wafRulesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  rightCol->addWidget(wafRulesTable);
+
+  rightCol->addWidget(new QLabel("<b>Add Signature Match:</b>"));
+  QHBoxLayout *ruleForm = new QHBoxLayout;
+  
+  wafRulePatternInput = new QLineEdit;
+  wafRulePatternInput->setPlaceholderText("Sub-string/Keyword");
+  ruleForm->addWidget(wafRulePatternInput);
+
+  wafRuleTypeCombo = new QComboBox;
+  wafRuleTypeCombo->addItems({"SQL Injection", "Cross-Site Scripting", "Path Traversal", "Command Injection", "Custom Pattern"});
+  ruleForm->addWidget(wafRuleTypeCombo);
+
+  QPushButton *addRuleBtn = new QPushButton("Add Rule");
+  connect(addRuleBtn, &QPushButton::clicked, [this]() {
+    QString pattern = wafRulePatternInput->text().trimmed();
+    QString type = wafRuleTypeCombo->currentText();
+    if (pattern.isEmpty()) {
+      statusText->append("Error: Rule pattern cannot be empty.");
+      return;
+    }
+    auto proxy = manager->getWafProxy();
+    if (proxy) {
+      if (proxy->addRule(pattern.toStdString(), type.toStdString())) {
+        statusText->append(QString("Added WAF inspection pattern: %1").arg(pattern));
+        wafRulePatternInput->clear();
+        updateWafTab();
+      } else {
+        statusText->append("Error: Rule already exists.");
+      }
+    }
+  });
+  ruleForm->addWidget(addRuleBtn);
+  rightCol->addLayout(ruleForm);
+
+  mainColumns->addLayout(rightCol, 2); // 2 parts width
+
+  layout->addLayout(mainColumns);
+  tab->setLayout(layout);
+  return tab;
+}
+
+void GUIMainWindow::updateWafTab() {
+  auto proxy = manager->getWafProxy();
+  if (!proxy) return;
+
+  // Sync controls if not active edited
+  enableWafCheck->setChecked(manager->isWafEnabled());
+  if (!wafPortInput->hasFocus()) {
+    wafPortInput->setText(QString::number(manager->getWafListenPort()));
+  }
+  if (!wafBackendHostInput->hasFocus()) {
+    wafBackendHostInput->setText(QString::fromStdString(manager->getWafBackendHost()));
+  }
+  if (!wafBackendPortInput->hasFocus()) {
+    wafBackendPortInput->setText(QString::number(manager->getWafBackendPort()));
+  }
+
+  // Update Stats labels
+  wafTotalReqLabel->setText(QString("<b>Total Requests:</b> %1").arg(proxy->getTotalRequests()));
+  wafBlockedReqLabel->setText(QString("<b>Blocked Attacks:</b> %1").arg(proxy->getBlockedRequests()));
+  
+  auto stats = proxy->getStats();
+  sqliCountLabel->setText(QString("<b>SQL Injection:</b> %1").arg(stats["SQL Injection"]));
+  xssCountLabel->setText(QString("<b>Cross-Site Scripting:</b> %1").arg(stats["Cross-Site Scripting"]));
+  traversalCountLabel->setText(QString("<b>Path Traversal:</b> %1").arg(stats["Path Traversal"]));
+  cmdInjectionCountLabel->setText(QString("<b>Command Injection:</b> %1").arg(stats["Command Injection"]));
+
+  // Update Logs Table
+  auto logs = proxy->getLogs();
+  wafLogsTable->setRowCount(0);
+  for (size_t i = 0; i < logs.size(); ++i) {
+    wafLogsTable->insertRow(i);
+    wafLogsTable->setItem(i, 0, new QTableWidgetItem(QString::fromStdString(logs[i].timestamp)));
+    wafLogsTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(logs[i].clientIp)));
+    wafLogsTable->setItem(i, 2, new QTableWidgetItem(QString::fromStdString(logs[i].method)));
+    wafLogsTable->setItem(i, 3, new QTableWidgetItem(QString::fromStdString(logs[i].url)));
+    wafLogsTable->setItem(i, 4, new QTableWidgetItem(QString::fromStdString(logs[i].attackType)));
+    
+    QTableWidgetItem* actItem = new QTableWidgetItem(logs[i].blocked ? "Blocked (403)" : "Allowed");
+    if (logs[i].blocked) {
+      actItem->setForeground(QBrush(QColor(228, 63, 90))); // Red
+    } else {
+      actItem->setForeground(QBrush(QColor(46, 204, 113))); // Green
+    }
+    wafLogsTable->setItem(i, 5, actItem);
+  }
+
+  // Update Rules Table
+  auto rules = proxy->getRules();
+  wafRulesTable->setRowCount(0);
+  for (size_t i = 0; i < rules.size(); ++i) {
+    wafRulesTable->insertRow(i);
+    wafRulesTable->setItem(i, 0, new QTableWidgetItem(QString::number(rules[i].id)));
+    wafRulesTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(rules[i].pattern)));
+
+    int id = rules[i].id;
+    QPushButton *delBtn = new QPushButton("Delete");
+    connect(delBtn, &QPushButton::clicked, [this, id]() {
+      auto p = manager->getWafProxy();
+      if (p) {
+        p->removeRule(id);
+        statusText->append(QString("Deleted WAF custom rule ID %1.").arg(id));
+        updateWafTab();
+      }
+    });
+    wafRulesTable->setCellWidget(i, 2, delBtn);
   }
 }

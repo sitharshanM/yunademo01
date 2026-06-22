@@ -236,6 +236,10 @@ FirewallManager::FirewallManager(const string &interface)
     if (captivePortalEnabled) {
         captivePortal->startPortalServer(8082);
     }
+    wafProxy = std::make_unique<WafProxy>(this);
+    if (wafEnabled) {
+        wafProxy->startServer(wafListenPort, wafBackendHost, wafBackendPort);
+    }
     honeypotManager->setTriggerCallback([this](const std::string& violatorIP, int port) {
         respondToThreat(violatorIP);
         sendNotification("Honeypot Triggered", "Blocked scanning host: " + violatorIP + " on trap port " + to_string(port));
@@ -1999,6 +2003,18 @@ void FirewallManager::loadConfig() {
         if (j.contains("captive_portal_enabled") && j["captive_portal_enabled"].is_bool()) {
             captivePortalEnabled = j["captive_portal_enabled"].get<bool>();
         }
+        if (j.contains("waf_enabled") && j["waf_enabled"].is_bool()) {
+            wafEnabled = j["waf_enabled"].get<bool>();
+        }
+        if (j.contains("waf_listen_port") && j["waf_listen_port"].is_number()) {
+            wafListenPort = j["waf_listen_port"].get<int>();
+        }
+        if (j.contains("waf_backend_host") && j["waf_backend_host"].is_string()) {
+            wafBackendHost = j["waf_backend_host"].get<string>();
+        }
+        if (j.contains("waf_backend_port") && j["waf_backend_port"].is_number()) {
+            wafBackendPort = j["waf_backend_port"].get<int>();
+        }
         Logger::log("Configuration loaded.", Logger::INFO);
     } catch (const exception &e) {
         Logger::log("Error loading config: " + string(e.what()), Logger::ERROR);
@@ -2025,6 +2041,10 @@ void FirewallManager::saveConfig() {
     j["knock_duration"] = knockOpenDurationSeconds;
     j["dns_sinkhole_enabled"] = dnsSinkholeEnabled;
     j["captive_portal_enabled"] = captivePortalEnabled;
+    j["waf_enabled"] = wafEnabled;
+    j["waf_listen_port"] = wafListenPort;
+    j["waf_backend_host"] = wafBackendHost;
+    j["waf_backend_port"] = wafBackendPort;
 
     ofstream file(CONFIG_FILE);
     if (file.is_open()) {

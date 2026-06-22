@@ -23,7 +23,8 @@ HEADERS += include/Common.h \
            include/IpsEngine.h \
            include/DpiClassifier.h \
            include/TopologyWidget.h \
-           include/CaptivePortal.h
+           include/CaptivePortal.h \
+           include/WafProxy.h
 
 SOURCES += src/main.cpp \
            src/Logger.cpp \
@@ -40,7 +41,8 @@ SOURCES += src/main.cpp \
            src/IpsEngine.cpp \
            src/DpiClassifier.cpp \
            src/TopologyWidget.cpp \
-           src/CaptivePortal.cpp
+           src/CaptivePortal.cpp \
+           src/WafProxy.cpp
 
 LIBS += -lpcap -lcurl -lreadline
 win32:LIBS += -lws2_32

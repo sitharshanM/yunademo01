@@ -104,6 +104,23 @@ private:
     QLineEdit* portalUsernameInput;
     QLineEdit* portalPasswordInput;
 
+    // WAF UI
+    QCheckBox* enableWafCheck;
+    QLineEdit* wafPortInput;
+    QLineEdit* wafBackendHostInput;
+    QLineEdit* wafBackendPortInput;
+    QTableWidget* wafLogsTable;
+    QTableWidget* wafRulesTable;
+    QLineEdit* wafRulePatternInput;
+    QComboBox* wafRuleTypeCombo;
+
+    QLabel* wafTotalReqLabel;
+    QLabel* wafBlockedReqLabel;
+    QLabel* sqliCountLabel;
+    QLabel* xssCountLabel;
+    QLabel* traversalCountLabel;
+    QLabel* cmdInjectionCountLabel;
+
     void updateVpnTable();
     void updateFeedList();
     void updateThreatSyncStats();
@@ -114,6 +131,7 @@ private:
     void updateDpiTable();
     void updateTopologyTab();
     void updatePortalTab();
+    void updateWafTab();
 
     QWidget* createBlockTab();
     QWidget* createFirewallTab();
@@ -132,6 +150,7 @@ private:
     QWidget* createDpiTab();
     QWidget* createTopologyTab();
     QWidget* createPortalTab();
+    QWidget* createWafTab();
     void updateSnifferGrid();
 };
 

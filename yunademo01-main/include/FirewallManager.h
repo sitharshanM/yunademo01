@@ -13,6 +13,7 @@
 #include "IpsEngine.h"
 #include "DpiClassifier.h"
 #include "CaptivePortal.h"
+#include "WafProxy.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -53,6 +54,11 @@ private:
     std::unique_ptr<DpiClassifier> dpiClassifier;
     std::unique_ptr<CaptivePortal> captivePortal;
     bool captivePortalEnabled = false;
+    std::unique_ptr<WafProxy> wafProxy;
+    bool wafEnabled = false;
+    int wafListenPort = 8080;
+    std::string wafBackendHost = "127.0.0.1";
+    int wafBackendPort = 8081;
     std::thread threatMonitorThread;
     std::thread maintenanceThread;
     std::condition_variable cv;
@@ -159,6 +165,25 @@ public:
         }
         saveConfig();
     }
+    WafProxy* getWafProxy() const { return wafProxy.get(); }
+    bool isWafEnabled() const { return wafEnabled; }
+    void setWafEnabled(bool enabled) {
+        wafEnabled = enabled;
+        if (wafProxy) {
+            if (enabled) {
+                wafProxy->startServer(wafListenPort, wafBackendHost, wafBackendPort);
+            } else {
+                wafProxy->stopServer();
+            }
+        }
+        saveConfig();
+    }
+    int getWafListenPort() const { return wafListenPort; }
+    void setWafListenPort(int port) { wafListenPort = port; saveConfig(); }
+    std::string getWafBackendHost() const { return wafBackendHost; }
+    void setWafBackendHost(const std::string& host) { wafBackendHost = host; saveConfig(); }
+    int getWafBackendPort() const { return wafBackendPort; }
+    void setWafBackendPort(int port) { wafBackendPort = port; saveConfig(); }
     std::string getWebhookUrl() const { return webhookUrl; }
     void setWebhookUrl(const std::string& url) { webhookUrl = url; saveConfig(); }
     void setCategorySchedule(const std::string& category, int start, int end, bool enabled);
