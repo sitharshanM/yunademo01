@@ -94,6 +94,9 @@ private:
     // DPI UI
     QTableWidget* dpiTable;
 
+    // Topology UI
+    TopologyWidget* topologyWidget;
+
     void updateVpnTable();
     void updateFeedList();
     void updateThreatSyncStats();
@@ -102,6 +105,7 @@ private:
     void updateHoneypotTab();
     void updateIpsTable();
     void updateDpiTable();
+    void updateTopologyTab();
 
     QWidget* createBlockTab();
     QWidget* createFirewallTab();
@@ -118,6 +122,7 @@ private:
     QWidget* createHoneypotTab();
     QWidget* createIpsTab();
     QWidget* createDpiTab();
+    QWidget* createTopologyTab();
     void updateSnifferGrid();
 };
 

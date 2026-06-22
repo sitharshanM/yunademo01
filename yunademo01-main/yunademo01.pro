@@ -21,7 +21,8 @@ HEADERS += include/Common.h \
            include/DeviceMapper.h \
            include/HoneypotManager.h \
            include/IpsEngine.h \
-           include/DpiClassifier.h
+           include/DpiClassifier.h \
+           include/TopologyWidget.h
 
 SOURCES += src/main.cpp \
            src/Logger.cpp \
@@ -36,7 +37,8 @@ SOURCES += src/main.cpp \
            src/DeviceMapper.cpp \
            src/HoneypotManager.cpp \
            src/IpsEngine.cpp \
-           src/DpiClassifier.cpp
+           src/DpiClassifier.cpp \
+           src/TopologyWidget.cpp
 
 LIBS += -lpcap -lcurl -lreadline
 

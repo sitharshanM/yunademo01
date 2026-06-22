@@ -7,6 +7,7 @@
 #include "DeviceMapper.h"
 #include "HoneypotManager.h"
 #include "DpiClassifier.h"
+#include "TopologyWidget.h"
 #include <QAbstractItemView>
 #include <QBrush>
 #include <QCheckBox>
@@ -56,6 +57,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   tabs->addTab(createHoneypotTab(), "Active Honeypot");
   tabs->addTab(createIpsTab(), "IPS Engine");
   tabs->addTab(createDpiTab(), "DPI Analytics");
+  tabs->addTab(createTopologyTab(), "Network Topology");
 
   QTimer *timer = new QTimer(this);
   connect(timer, &QTimer::timeout, [this]() {
@@ -67,6 +69,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
     updateHoneypotTab();
     updateIpsTable();
     updateDpiTable();
+    updateTopologyTab();
   });
   timer->start(1000);
 
@@ -78,6 +81,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   updateHoneypotTab();
   updateIpsTable();
   updateDpiTable();
+  updateTopologyTab();
 
   QVBoxLayout *mainLayout = new QVBoxLayout;
   mainLayout->addWidget(tabs);
@@ -1853,5 +1857,38 @@ void GUIMainWindow::updateDpiTable() {
     dpiTable->setItem(row, 2, bytesItem);
     dpiTable->setItem(row, 3, percentItem);
     row++;
+  }
+}
+
+QWidget *GUIMainWindow::createTopologyTab() {
+  QWidget *tab = new QWidget;
+  QVBoxLayout *layout = new QVBoxLayout;
+
+  QLabel *titleLabel = new QLabel("<b>Dynamic Network Topology Graphic Mapper</b>");
+  titleLabel->setStyleSheet("font-size: 14px; margin-bottom: 5px;");
+  layout->addWidget(titleLabel);
+
+  layout->addWidget(new QLabel("<i>Double-click any node to block or rate-limit the device. Active flows are animated in real-time.</i>"));
+
+  topologyWidget = new TopologyWidget(manager, this);
+  layout->addWidget(topologyWidget);
+
+  QHBoxLayout *btnLayout = new QHBoxLayout;
+  QPushButton *refreshBtn = new QPushButton("Refresh Topology Map");
+  connect(refreshBtn, &QPushButton::clicked, [this]() {
+    updateTopologyTab();
+    statusText->append("Network topology map refreshed.");
+  });
+  btnLayout->addWidget(refreshBtn);
+  btnLayout->addStretch();
+  layout->addLayout(btnLayout);
+
+  tab->setLayout(layout);
+  return tab;
+}
+
+void GUIMainWindow::updateTopologyTab() {
+  if (topologyWidget) {
+    topologyWidget->updateTopology();
   }
 }
