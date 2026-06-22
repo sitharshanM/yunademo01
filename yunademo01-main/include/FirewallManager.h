@@ -11,6 +11,7 @@
 #include "DeviceMapper.h"
 #include "HoneypotManager.h"
 #include "IpsEngine.h"
+#include "DpiClassifier.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -48,6 +49,7 @@ private:
     std::unique_ptr<DeviceMapper> deviceMapper;
     std::unique_ptr<HoneypotManager> honeypotManager;
     std::unique_ptr<IpsEngine> ipsEngine;
+    std::unique_ptr<DpiClassifier> dpiClassifier;
     std::thread threatMonitorThread;
     std::thread maintenanceThread;
     std::condition_variable cv;
@@ -140,6 +142,7 @@ public:
     DeviceMapper* getDeviceMapper() const { return deviceMapper.get(); }
     HoneypotManager* getHoneypotManager() const { return honeypotManager.get(); }
     IpsEngine* getIpsEngine() const { return ipsEngine.get(); }
+    DpiClassifier* getDpiClassifier() const { return dpiClassifier.get(); }
     std::string getWebhookUrl() const { return webhookUrl; }
     void setWebhookUrl(const std::string& url) { webhookUrl = url; saveConfig(); }
     void setCategorySchedule(const std::string& category, int start, int end, bool enabled);

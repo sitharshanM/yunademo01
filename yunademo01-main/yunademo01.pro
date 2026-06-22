@@ -20,7 +20,8 @@ HEADERS += include/Common.h \
            include/QosManager.h \
            include/DeviceMapper.h \
            include/HoneypotManager.h \
-           include/IpsEngine.h
+           include/IpsEngine.h \
+           include/DpiClassifier.h
 
 SOURCES += src/main.cpp \
            src/Logger.cpp \
@@ -34,7 +35,8 @@ SOURCES += src/main.cpp \
            src/QosManager.cpp \
            src/DeviceMapper.cpp \
            src/HoneypotManager.cpp \
-           src/IpsEngine.cpp
+           src/IpsEngine.cpp \
+           src/DpiClassifier.cpp
 
 LIBS += -lpcap -lcurl -lreadline
 

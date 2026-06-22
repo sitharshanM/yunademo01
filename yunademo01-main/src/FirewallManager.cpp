@@ -231,6 +231,7 @@ FirewallManager::FirewallManager(const string &interface)
 
     honeypotManager = std::make_unique<HoneypotManager>();
     ipsEngine = std::make_unique<IpsEngine>();
+    dpiClassifier = std::make_unique<DpiClassifier>();
     honeypotManager->setTriggerCallback([this](const std::string& violatorIP, int port) {
         respondToThreat(violatorIP);
         sendNotification("Honeypot Triggered", "Blocked scanning host: " + violatorIP + " on trap port " + to_string(port));
@@ -1229,6 +1230,10 @@ void FirewallManager::processPacket(const string &sourceIP, const string &source
     string ipsMsg = "";
     string status = "Allowed";
 
+    // DPI protocol classification & stats recording
+    std::string appProtocol = protocol; 
+    std::string appDetail = "";
+
     {
         lock_guard<mutex> lock(globalMutex);
 
@@ -1252,6 +1257,14 @@ void FirewallManager::processPacket(const string &sourceIP, const string &source
                 }
                 sendNotification("IPS Signature Triggered", "Rule " + to_string(matchedRule.sid) + ": " + matchedRule.message + " from " + sourceIP);
             }
+        }
+
+        // DPI processing
+        if (dpiClassifier) {
+            int dPort = 0;
+            try { dPort = std::stoi(destPort); } catch(...) {}
+            appProtocol = dpiClassifier->classifyPayload(payload, dPort, appDetail);
+            dpiClassifier->recordTraffic(appProtocol, size);
         }
 
         // DNS Sinkhole check
@@ -1344,7 +1357,14 @@ void FirewallManager::processPacket(const string &sourceIP, const string &source
 
         LivePacketRecord record;
         record.timestamp = time_buf;
-        record.protocol = protocol;
+        
+        // Show protocol with detailed info if available
+        if (!appDetail.empty() && appProtocol != "Unknown") {
+            record.protocol = appProtocol + " (" + appDetail + ")";
+        } else {
+            record.protocol = appProtocol;
+        }
+
         record.sourceIP = sourceIP;
         record.sourcePort = sourcePort;
         record.destIP = destIP;

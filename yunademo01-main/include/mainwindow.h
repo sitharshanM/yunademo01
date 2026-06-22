@@ -91,6 +91,9 @@ private:
     QTableWidget* ipsAlertsTable;
     QLineEdit* ipsRuleInput;
 
+    // DPI UI
+    QTableWidget* dpiTable;
+
     void updateVpnTable();
     void updateFeedList();
     void updateThreatSyncStats();
@@ -98,6 +101,7 @@ private:
     void updateDeviceTable();
     void updateHoneypotTab();
     void updateIpsTable();
+    void updateDpiTable();
 
     QWidget* createBlockTab();
     QWidget* createFirewallTab();
@@ -113,6 +117,7 @@ private:
     QWidget* createDeviceMapperTab();
     QWidget* createHoneypotTab();
     QWidget* createIpsTab();
+    QWidget* createDpiTab();
     void updateSnifferGrid();
 };
 

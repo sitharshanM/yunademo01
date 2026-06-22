@@ -6,6 +6,7 @@
 #include "VPNPoolManager.h"
 #include "DeviceMapper.h"
 #include "HoneypotManager.h"
+#include "DpiClassifier.h"
 #include <QAbstractItemView>
 #include <QBrush>
 #include <QCheckBox>
@@ -54,6 +55,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   tabs->addTab(createDeviceMapperTab(), "Device Mapper");
   tabs->addTab(createHoneypotTab(), "Active Honeypot");
   tabs->addTab(createIpsTab(), "IPS Engine");
+  tabs->addTab(createDpiTab(), "DPI Analytics");
 
   QTimer *timer = new QTimer(this);
   connect(timer, &QTimer::timeout, [this]() {
@@ -64,6 +66,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
     updateDeviceTable();
     updateHoneypotTab();
     updateIpsTable();
+    updateDpiTable();
   });
   timer->start(1000);
 
@@ -74,6 +77,7 @@ GUIMainWindow::GUIMainWindow(FirewallManager *mgr, QWidget *parent)
   updateDeviceTable();
   updateHoneypotTab();
   updateIpsTable();
+  updateDpiTable();
 
   QVBoxLayout *mainLayout = new QVBoxLayout;
   mainLayout->addWidget(tabs);
@@ -1755,5 +1759,99 @@ void GUIMainWindow::updateIpsTable() {
     ipsAlertsTable->setItem(i, 3, portItem);
     ipsAlertsTable->setItem(i, 4, msgItem);
     ipsAlertsTable->setItem(i, 5, actItem);
+  }
+}
+
+QWidget *GUIMainWindow::createDpiTab() {
+  QWidget *tab = new QWidget;
+  QVBoxLayout *layout = new QVBoxLayout;
+
+  QLabel *titleLabel = new QLabel("<b>Deep Packet Inspection (DPI) & Protocol Analytics</b>");
+  titleLabel->setStyleSheet("font-size: 14px; margin-bottom: 10px;");
+  layout->addWidget(titleLabel);
+
+  layout->addWidget(new QLabel("<b>Application Protocol Traffic Breakdown:</b>"));
+  dpiTable = new QTableWidget;
+  dpiTable->setColumnCount(4);
+  QStringList headers;
+  headers << "Protocol" << "Packet Count" << "Total Traffic (Bytes)" << "Traffic share (%)";
+  dpiTable->setHorizontalHeaderLabels(headers);
+  dpiTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  dpiTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  dpiTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+  layout->addWidget(dpiTable);
+
+  QHBoxLayout *btnLayout = new QHBoxLayout;
+  QPushButton *clearBtn = new QPushButton("Clear Classification Stats");
+  connect(clearBtn, &QPushButton::clicked, [this]() {
+    auto dpi = manager->getDpiClassifier();
+    if (dpi) {
+      dpi->clearStats();
+      statusText->append("DPI classification statistics cleared.");
+      updateDpiTable();
+    }
+  });
+
+  btnLayout->addWidget(clearBtn);
+  btnLayout->addStretch();
+  layout->addLayout(btnLayout);
+
+  tab->setLayout(layout);
+  return tab;
+}
+
+void GUIMainWindow::updateDpiTable() {
+  auto dpi = manager->getDpiClassifier();
+  if (!dpi) return;
+
+  auto stats = dpi->getStats();
+  dpiTable->setRowCount(0);
+  dpiTable->setRowCount(stats.size());
+
+  unsigned long long overallBytes = 0;
+  for (const auto& pair : stats) {
+    overallBytes += pair.second.totalBytes;
+  }
+
+  int row = 0;
+  for (const auto& pair : stats) {
+    const auto &stat = pair.second;
+    
+    QTableWidgetItem *protoItem = new QTableWidgetItem(QString::fromStdString(stat.name));
+    QTableWidgetItem *packetsItem = new QTableWidgetItem(QString::number(stat.packetCount));
+    
+    QString bytesStr;
+    if (stat.totalBytes < 1024) {
+      bytesStr = QString("%1 B").arg(stat.totalBytes);
+    } else if (stat.totalBytes < 1024 * 1024) {
+      bytesStr = QString("%1 KB").arg(QString::number(stat.totalBytes / 1024.0, 'f', 2));
+    } else {
+      bytesStr = QString("%1 MB").arg(QString::number(stat.totalBytes / (1024.0 * 1024.0), 'f', 2));
+    }
+    QTableWidgetItem *bytesItem = new QTableWidgetItem(bytesStr);
+
+    double percent = 0.0;
+    if (overallBytes > 0) {
+      percent = (static_cast<double>(stat.totalBytes) / overallBytes) * 100.0;
+    }
+    
+    QTableWidgetItem *percentItem = new QTableWidgetItem(QString("%1%").arg(QString::number(percent, 'f', 1)));
+    percentItem->setTextAlignment(Qt::AlignCenter);
+
+    if (stat.name == "TLS/SSL") {
+      protoItem->setForeground(QBrush(QColor(0, 102, 204)));
+    } else if (stat.name == "HTTP") {
+      protoItem->setForeground(QBrush(QColor(0, 153, 76)));
+    } else if (stat.name == "SSH") {
+      protoItem->setForeground(QBrush(QColor(153, 0, 153)));
+    } else if (stat.name == "DNS") {
+      protoItem->setForeground(QBrush(QColor(204, 102, 0)));
+    }
+
+    dpiTable->setItem(row, 0, protoItem);
+    dpiTable->setItem(row, 1, packetsItem);
+    dpiTable->setItem(row, 2, bytesItem);
+    dpiTable->setItem(row, 3, percentItem);
+    row++;
   }
 }
